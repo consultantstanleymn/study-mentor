@@ -384,3 +384,18 @@ input[type=range] { accent-color: var(--primary); min-height: 32px; }
 .layout[data-board="rail"] .board-top { flex-direction: column; }
 .layout[data-board="rail"] .eyebrow { writing-mode: vertical-rl; margin: 0; }
 .board-body { transition: opacity .3s var(--ease); }
+
+/* ===== round 2 fixes ===== */
+/* animate the shape only: a transform on the node group overrides Mermaid's own positioning */
+.diagram svg g.node.focus { animation: none; transform-box: view-box; filter: none; }
+.diagram svg g.node.focus > rect, .diagram svg g.node.focus > polygon, .diagram svg g.node.focus > circle { transform-box: fill-box; transform-origin: center; animation: nodein .35s var(--ease) both; filter: drop-shadow(0 0 14px rgba(45, 212, 191, .5)); }
+.diagram svg g.node:not(.focus) > rect { fill: var(--surface-3) !important; stroke: rgba(255, 255, 255, .18) !important; }
+.diagram svg g.node:not(.focus) .nodeLabel, .diagram svg g.node:not(.focus) span { color: var(--text-2) !important; }
+.diagram svg.has-focus g.node:not(.focus), .diagram svg.has-focus g.cluster:not(.focus) { opacity: .6; filter: none; }
+.bcard .diagram svg { max-height: 70vh; }
+/* one glow at a time, and quieter */
+.stage[data-state="speaking"] { border-color: rgba(45, 212, 191, .35); box-shadow: 0 0 0 1px rgba(45, 212, 191, .12); }
+.board.fresh { animation-iteration-count: 1; }
+/* sidebar start/end is a quiet text action; the dock button is the one primary action */
+#startBtn { background: none; border: 0; color: var(--muted); min-height: 40px; }
+.bar i { min-width: 4px; }
