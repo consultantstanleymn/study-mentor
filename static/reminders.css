@@ -1,0 +1,9 @@
+.remind { border: 0; border-top: 1px solid var(--line); margin: 6px 0 0; padding: 10px 0 0; display: grid; gap: 8px; }
+.remind legend { font-size: 13px; color: var(--muted); padding: 0 6px 0 0; }
+.remind-row { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.remind-row label.chk { display: flex; align-items: center; gap: 8px; min-height: 44px; min-width: 0; flex: 1; color: var(--text); font-size: 14px; cursor: pointer; }
+.remind-row input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--primary); margin: 0; }
+.remind-row input[type=time] { min-height: 44px; background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; font: inherit; color-scheme: dark; }
+.remind-row input:focus-visible, #crabPreview:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+#crabPreview { min-height: 44px; }
+.remind-msg { font-size: 12px; color: var(--muted); min-height: 16px; }

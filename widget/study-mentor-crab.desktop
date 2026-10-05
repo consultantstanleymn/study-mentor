@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Study Mentor Crab
+Comment=Pixel crab study reminder
+Exec=/home/stanleysujithnelavala/study-mentor/venv/bin/python /home/stanleysujithnelavala/study-mentor/widget/crab_widget.py
+Icon=/home/stanleysujithnelavala/study-mentor/static/crab.svg
+X-GNOME-Autostart-enabled=true
+NoDisplay=true

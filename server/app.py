@@ -13,11 +13,13 @@ import content
 import db
 import tutor
 import voice
+from schedule import router as schedule_router
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 
 app = FastAPI(title="Study Mentor")
+app.include_router(schedule_router)
 
 
 @app.on_event("startup")

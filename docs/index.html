@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Study Mentor</title>
+  <meta name="description" content="Study Mentor is a voice-first tutor that runs on your own computer. Talk through your lesson, get quizzed, and watch it draw the idea.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232DD4BF'/%3E%3Cpath d='M10 18h2v2h-2zM14 18h2v2h-2zM18 18h2v2h-2zM22 18h2v2h-2zM12 14h2v2h-2zM16 14h2v2h-2zM20 14h2v2h-2zM10 22h12v2H10z' fill='%23060C0E'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --bg: #060C0E;
+      --surface: #0C1719;
+      --border: #1D3237;
+      --text: #E8F5F2;
+      --muted: #8DA9A6;
+      --teal: #2DD4BF;
+      --orange: #FB923C;
+      --focus-ring: #2DD4BF;
+      --max-width: 1040px;
+      --radius: 16px;
+      --radius-sm: 10px;
+      --space-lg: 3rem;
+      --space-md: 2rem;
+      --space-sm: 1.25rem;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "SF Pro Display", Inter, system-ui, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 1.5rem;
+    }
+
+    main {
+      width: 100%;
+      max-width: var(--max-width);
+      flex: 1;
+    }
+
+    section {
+      padding: var(--space-lg) 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    section:last-of-type {
+      border-bottom: none;
+    }
+
+    h1, h2, h3 {
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+
+    h1 {
+      font-size: 3.5rem;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+
+    h2 {
+      font-size: 2.2rem;
+      margin-bottom: 1.5rem;
+      color: var(--text);
+    }
+
+    h3 {
+      font-size: 1.4rem;
+      margin-bottom: 0.75rem;
+      color: var(--teal);
+    }
+
+    p {
+      color: var(--muted);
+      margin-bottom: 1rem;
+      max-width: 65ch;
+    }
+
+    a {
+      color: var(--teal);
+      text-decoration: none;
+      transition: color 0.2s ease;
+      border-radius: 4px;
+    }
+
+    a:hover {
+      color: #5eead4;
+      text-decoration: underline;
+    }
+
+    a:focus-visible,
+    button:focus-visible,
+    [tabindex]:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 4px;
+      border-radius: 4px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: 0.8rem 1.8rem;
+      border-radius: 40px;
+      font-weight: 600;
+      font-size: 1rem;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+      text-decoration: none;
+      line-height: 1;
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn-primary {
+      background-color: var(--orange);
+      color: #060C0E;
+      border-color: var(--orange);
+    }
+
+    .btn-primary:hover {
+      background-color: #fca55c;
+      border-color: #fca55c;
+      text-decoration: none;
+      color: #060C0E;
+    }
+
+    .btn-secondary {
+      background-color: transparent;
+      color: var(--teal);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background-color: rgba(45, 212, 191, 0.08);
+      border-color: var(--teal);
+      text-decoration: none;
+      color: var(--teal);
+    }
+
+    .hero {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      padding: 4rem 0 2rem 0;
+      border-bottom: none;
+    }
+
+    .hero-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin: 1.5rem 0 2rem 0;
+    }
+
+    .hero-figure {
+      width: 100%;
+      margin: 2rem 0 1rem 0;
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: 0 0 40px rgba(45, 212, 191, 0.15), 0 0 80px rgba(45, 212, 191, 0.05);
+      border: 1px solid var(--border);
+    }
+
+    .hero-figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: var(--radius);
+    }
+
+    .grid-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+    }
+
+    .card {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .card:hover {
+      border-color: #2a4a50;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+
+    .card h3 {
+      margin-top: 0;
+      font-size: 1.3rem;
+    }
+
+    .card p {
+      font-size: 0.95rem;
+      margin-bottom: 0;
+    }
+
+    .diagram {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      margin: 2rem 0 1rem 0;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 1.5rem;
+    }
+
+    .diagram-node {
+      background-color: #0F1E22;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1rem 1.2rem;
+      text-align: center;
+      min-width: 140px;
+      font-weight: 500;
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .diagram-node small {
+      color: var(--muted);
+      font-weight: 400;
+      font-size: 0.8rem;
+    }
+
+    .diagram-arrow {
+      font-size: 1.8rem;
+      color: var(--teal);
+      font-weight: 300;
+      line-height: 1;
+    }
+
+    .quick-start {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      margin: 1.5rem 0;
+    }
+
+    .quick-start ol {
+      padding-left: 1.5rem;
+      color: var(--text);
+      margin-bottom: 1.5rem;
+    }
+
+    .quick-start li {
+      margin-bottom: 0.5rem;
+      color: var(--muted);
+    }
+
+    .quick-start li strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    pre {
+      background-color: #080F11;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1.5rem;
+      overflow-x: auto;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      position: relative;
+      margin: 1rem 0;
+    }
+
+    code {
+      font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Roboto Mono', Menlo, monospace;
+      color: #C9E5E0;
+      white-space: pre;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 0.75rem;
+      right: 0.75rem;
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--teal);
+      border-radius: 8px;
+      padding: 0.5rem 1rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
+    }
+
+    .copy-btn:hover {
+      background-color: #122226;
+      border-color: var(--teal);
+    }
+
+    .shortcut-list {
+      list-style: none;
+      padding: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      margin-top: 1rem;
+    }
+
+    .shortcut-list li {
+      background-color: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 0.9rem 1.4rem;
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+      color: var(--text);
+      font-weight: 500;
+    }
+
+    .shortcut-list kbd {
+      background-color: #0F1E22;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.3rem 0.7rem;
+      font-family: inherit;
+      font-weight: 600;
+      color: var(--teal);
+      font-size: 0.9rem;
+    }
+
+    footer {
+      width: 100%;
+      max-width: var(--max-width);
+      padding: 2rem 0 3rem 0;
+      border-top: 1px solid var(--border);
+      margin-top: 2rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    footer a {
+      color: var(--teal);
+      margin-left: 1rem;
+    }
+
+    footer a:first-child {
+      margin-left: 0;
+    }
+
+    @media (max-width: 640px) {
+      h1 {
+        font-size: 2.5rem;
+      }
+      h2 {
+        font-size: 1.8rem;
+      }
+      .hero {
+        padding-top: 2rem;
+      }
+      .diagram {
+        flex-direction: column;
+        gap: 0.8rem;
+      }
+      .diagram-arrow {
+        transform: rotate(90deg);
+      }
+      .grid-cards {
+        grid-template-columns: 1fr;
+      }
+      .shortcut-list {
+        flex-direction: column;
+      }
+      footer {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero" aria-labelledby="hero-heading">
+      <h1 id="hero-heading">Study Mentor</h1>
+      <p style="font-size: 1.3rem; color: var(--text); max-width: 700px; margin-bottom: 1.5rem;">
+        A voice-first tutor that runs on your own computer. Talk through your lesson, get quizzed, and watch it draw the idea.
+      </p>
+      <div class="hero-buttons">
+        <a href="https://github.com/consultantstanleymn/study-mentor" class="btn btn-primary" target="_blank" rel="noopener noreferrer">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 0.5rem;" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          Get it on GitHub
+        </a>
+        <a href="#quick-start" class="btn btn-secondary">Quick start</a>
+      </div>
+      <figure class="hero-figure">
+        <img src="screenshot.png" alt="Study Mentor: the mentor speaking while the whiteboard highlights a diagram node" width="1440" height="855" loading="lazy">
+      </figure>
+    </section>
+
+    <section aria-labelledby="what-it-does">
+      <h2 id="what-it-does">What it does</h2>
+      <div class="grid-cards">
+        <div class="card">
+          <h3>Teaches, does not read</h3>
+          <p>Explains in its own words, asks questions, and pushes back. It engages you instead of reciting text.</p>
+        </div>
+        <div class="card">
+          <h3>Draws as it explains</h3>
+          <p>Tables, key points, and Mermaid diagrams with each node highlighted step by step. The whiteboard resizes itself to fit the content.</p>
+        </div>
+        <div class="card">
+          <h3>Remembers what you miss</h3>
+          <p>Local SQLite progress tracking. Weak topics come back in future sessions, and your streak is preserved.</p>
+        </div>
+        <div class="card">
+          <h3>Private and cheap</h3>
+          <p>Speech runs on your machine. Only text goes to the language model API you choose. About a few dollars a month with a cheap model.</p>
+        </div>
+      </div>
+    </section>
+
+    <section aria-labelledby="how-it-works">
+      <h2 id="how-it-works">How it works</h2>
+      <div class="diagram" role="img" aria-label="Diagram showing Browser with mic, captions, and whiteboard connecting to Local server FastAPI, which connects to Language model API. Local server also connects to Kokoro voice, and Browser connects to faster-whisper hearing.">
+        <div class="diagram-node">
+          <span>Browser</span>
+          <small>mic, captions, whiteboard</small>
+        </div>
+        <span class="diagram-arrow" aria-hidden="true">↔</span>
+        <div class="diagram-node">
+          <span>Local server</span>
+          <small>FastAPI</small>
+        </div>
+        <span class="diagram-arrow" aria-hidden="true">↔</span>
+        <div class="diagram-node">
+          <span>Language model API</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 0.8rem; align-items: center;">
+          <div class="diagram-node" style="min-width: 120px;">
+            <span>Local server</span>
+            <small>→ Kokoro voice</small>
+          </div>
+          <div class="diagram-node" style="min-width: 120px;">
+            <span>Browser</span>
+            <small>→ faster-whisper hearing</small>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="quick-start" aria-labelledby="quick-start-heading">
+      <h2 id="quick-start-heading">Quick start</h2>
+      <div class="quick-start">
+        <ol>
+          <li><strong>Clone the repository</strong> and enter the directory.</li>
+          <li><strong>Create a virtual environment</strong> and install dependencies.</li>
+          <li><strong>Add your API key</strong> to <code>~/.config/buddi/deepseek.key</code>.</li>
+          <li><strong>Download TTS models</strong> into <code>~/buddi/tts</code>.</li>
+          <li><strong>Run the server</strong> and open the local URL.</li>
+        </ol>
+        <pre><code id="install-code">git clone https://github.com/consultantstanleymn/study-mentor.git
+cd study-mentor
+python -m venv venv
+venv/bin/pip install fastapi "uvicorn[standard]" httpx beautifulsoup4 lxml faster-whisper numpy soundfile kokoro-onnx python-multipart
+put your API key in ~/.config/buddi/deepseek.key
+download kokoro-v1.0.onnx and voices-v1.0.bin into ~/buddi/tts
+./run.sh
+open http://127.0.0.1:8765</code></pre>
+        <button class="copy-btn" id="copy-button" aria-label="Copy installation commands">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M4 1.5h7.5v1H5v8.5h-1v-9.5zM6 4h7.5v10.5H6V4zm1 1v8.5h5.5V5H7z"/>
+          </svg>
+          Copy
+        </button>
+      </div>
+    </section>
+
+    <section aria-labelledby="curriculum">
+      <h2 id="curriculum">Bring your own curriculum</h2>
+      <p>Day-based folders (days.json plus day pages) or a week-based checklist file. Register your content in <code>server/content.py</code>.</p>
+    </section>
+
+    <section aria-labelledby="shortcuts">
+      <h2 id="shortcuts">Keys and shortcuts</h2>
+      <ul class="shortcut-list">
+        <li><kbd>Space</kbd> Hold to talk</li>
+        <li><kbd>Esc</kbd> Interrupt</li>
+        <li><span>Hands-free switch</span> <small>(use headphones)</small></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <span>Copyright (c) 2026 Stanley Sujith Nelavala. MIT License.</span>
+    <span>
+      <a href="https://github.com/consultantstanleymn/study-mentor" target="_blank" rel="noopener noreferrer">GitHub repo</a>
+      <a href="https://github.com/consultantstanleymn/study-mentor/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">LICENSE</a>
+      <a href="https://stanley-n.com/" target="_blank" rel="noopener noreferrer">Portfolio</a>
+    </span>
+  </footer>
+
+  <script>
+    (function() {
+      const copyButton = document.getElementById('copy-button');
+      const codeBlock = document.getElementById('install-code');
+      if (!copyButton || !codeBlock) return;
+
+      copyButton.addEventListener('click', async function() {
+        const textToCopy = codeBlock.innerText.trim();
+        try {
+          await navigator.clipboard.writeText(textToCopy);
+          copyButton.textContent = 'Copied';
+          copyButton.setAttribute('aria-label', 'Copied');
+        } catch (err) {
+          // Fallback: use a temporary textarea
+          const textarea = document.createElement('textarea');
+          textarea.value = textToCopy;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          try {
+            document.execCommand('copy');
+            copyButton.textContent = 'Copied';
+            copyButton.setAttribute('aria-label', 'Copied');
+          } catch (e) {
+            copyButton.textContent = 'Copy failed';
+            copyButton.setAttribute('aria-label', 'Copy failed');
+          }
+          document.body.removeChild(textarea);
+        }
+        setTimeout(() => {
+          copyButton.textContent = 'Copy';
+          copyButton.setAttribute('aria-label', 'Copy installation commands');
+        }, 2000);
+      });
+    })();
+  </script>
+</body>
+</html>
