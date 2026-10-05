@@ -1,0 +1,8 @@
+venv/
+content/
+data/
+__pycache__/
+*.pyc
+*.key
+.env
+design-system/

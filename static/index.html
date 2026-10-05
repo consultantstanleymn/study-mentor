@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Study Mentor</title>
+<link rel="icon" href="/static/crab.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<a class="skip" href="#stage">Skip to conversation</a>
+
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 16 12" aria-hidden="true" shape-rendering="crispEdges"><g fill="#2DD4BF"><rect x="2" y="1" width="2" height="1"/><rect x="12" y="1" width="2" height="1"/><rect x="1" y="2" width="4" height="2"/><rect x="11" y="2" width="4" height="2"/><rect x="2" y="4" width="2" height="1"/><rect x="12" y="4" width="2" height="1"/><rect x="5" y="4" width="6" height="1"/><rect x="4" y="5" width="8" height="1"/><rect x="3" y="6" width="10" height="3"/><rect x="4" y="9" width="8" height="1"/><rect x="3" y="10" width="1" height="1"/><rect x="5" y="10" width="1" height="1"/><rect x="10" y="10" width="1" height="1"/><rect x="12" y="10" width="1" height="1"/><rect x="2" y="11" width="1" height="1"/><rect x="13" y="11" width="1" height="1"/></g></svg>
+    <span>Study Mentor</span>
+  </div>
+  <div class="seg" id="trackSeg" role="tablist" aria-label="Study track"></div>
+  <div class="top-actions">
+    <button class="icon-btn" id="voiceBtn" aria-haspopup="dialog" aria-expanded="false" aria-controls="voicePop" title="Voice settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      <span>Voice settings</span>
+    </button>
+    <div class="pop" id="voicePop" role="dialog" aria-label="Voice settings" hidden>
+      <label for="voiceSel">Mentor voice</label>
+      <select id="voiceSel"></select>
+      <label for="speedRng">Speaking speed <output id="speedOut">1.0x</output></label>
+      <input type="range" id="speedRng" min="0.85" max="1.3" step="0.05" value="1">
+      <button class="btn ghost small" id="voiceTest">Hear a sample</button>
+    </div>
+  </div>
+</header>
+
+<main class="layout">
+  <aside class="side" aria-label="Today">
+    <section class="card today">
+      <div class="eyebrow" id="phase">Phase</div>
+      <div class="daynum"><span id="dayNum">Day 1</span><small id="dayOf">of 70</small></div>
+      <h1 class="daytitle" id="dayTitle">Loading</h1>
+      <div class="chips" id="svcChips"></div>
+      <div class="bar" role="progressbar" aria-label="Track progress" aria-valuemin="0" aria-valuemax="100" id="bar"><i id="barFill"></i></div>
+      <div class="barlabel" id="barLabel"></div>
+      <div class="daynav">
+        <button class="icon-btn sq" id="prevDay" aria-label="Previous"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="btn ghost small grow" id="jumpBtn" aria-haspopup="listbox">Jump to&hellip;</button>
+        <button class="icon-btn sq" id="nextDay" aria-label="Next"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow">How should we work?</div>
+      <div class="modes" id="modes" role="radiogroup" aria-label="Session mode">
+        <button role="radio" aria-checked="true" data-mode="teach"><b>Teach</b><span>Guided lesson</span></button>
+        <button role="radio" aria-checked="false" data-mode="quiz"><b>Quiz</b><span>Exam-style reps</span></button>
+        <button role="radio" aria-checked="false" data-mode="grill"><b>Grill</b><span>Hard follow-ups</span></button>
+        <button role="radio" aria-checked="false" data-mode="review"><b>Review</b><span>Weak spots</span></button>
+        <button role="radio" aria-checked="false" data-mode="chat"><b>Ask</b><span>Open questions</span></button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow">Needs work</div>
+      <ul class="weak" id="weakList"></ul>
+      <div class="stats" id="stats"></div>
+    </section>
+  </aside>
+
+  <section class="stage" id="stage" aria-label="Conversation">
+    <div class="avatar-wrap">
+      <div class="avatar" id="avatar" data-state="idle">
+        <div class="ring"></div>
+        <svg class="crab" viewBox="0 0 16 12" role="img" aria-label="Mentor" shape-rendering="crispEdges">
+          <g class="c-legs" fill="#14B8A6"><rect x="3" y="10" width="1" height="1"/><rect x="5" y="10" width="1" height="1"/><rect x="10" y="10" width="1" height="1"/><rect x="12" y="10" width="1" height="1"/><rect x="2" y="11" width="1" height="1"/><rect x="13" y="11" width="1" height="1"/></g>
+          <g class="c-claw-l" fill="#5EEAD4"><rect x="2" y="1" width="2" height="1"/><rect x="1" y="2" width="4" height="2"/><rect x="2" y="4" width="2" height="1"/></g>
+          <g class="c-claw-r" fill="#5EEAD4"><rect x="12" y="1" width="2" height="1"/><rect x="11" y="2" width="4" height="2"/><rect x="12" y="4" width="2" height="1"/></g>
+          <g fill="#2DD4BF"><rect x="5" y="4" width="6" height="1"/><rect x="4" y="5" width="8" height="1"/><rect x="3" y="6" width="10" height="3"/><rect x="4" y="9" width="8" height="1"/></g>
+          <g fill="#14B8A6"><rect x="4" y="9" width="8" height="1"/></g>
+          <g class="c-eyes"><rect class="eye" x="5" y="6" width="2" height="2" fill="#04201E"/><rect class="eye" x="9" y="6" width="2" height="2" fill="#04201E"/></g>
+          <g fill="#FFFFFF"><rect x="5" y="6" width="1" height="1"/><rect x="9" y="6" width="1" height="1"/></g>
+        </svg>
+      </div>
+      <div class="status" id="status-wrap"><span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="status" role="status" aria-live="polite">Ready when you are</span></div>
+    </div>
+
+    <div class="captions" id="captions" aria-live="off">
+      <p class="cap-line" id="capLine">Press <kbd>Start session</kbd> and I will take it from there.</p>
+    </div>
+
+    <div class="suggest" id="suggest" role="group" aria-label="Start a session">
+      <button data-mode="teach">Teach me today's lesson</button>
+      <button data-mode="quiz">Quiz me</button>
+      <button data-mode="grill">Grill me</button>
+      <button data-mode="review">Review my weak spots</button>
+    </div>
+
+    <ol class="transcript" id="transcript" aria-label="Transcript" role="log" aria-live="polite"></ol>
+
+    <div class="dock">
+      <form class="typebox" id="typeForm" autocomplete="off">
+        <label class="sr" for="typeIn">Type a message</label>
+        <input id="typeIn" type="text" placeholder="Or type here and press Enter" enterkeyhint="send">
+      </form>
+      <div class="dock-main">
+        <button class="btn ghost" id="stopBtn" aria-label="Stop the mentor (Escape)" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>Stop
+        </button>
+        <button class="mic" id="micBtn" aria-pressed="false" aria-label="Hold to talk (or hold Space)">
+          <span class="mic-rings"></span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a4 4 0 0 0-4 4v5a4 4 0 0 0 8 0V7a4 4 0 0 0-4-4Zm-7 9a7 7 0 0 0 14 0m-7 7v2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span class="mic-label" id="micLabel" hidden>Hold to talk</span>
+        </button>
+        <label class="toggle" for="handsFree">
+          <input type="checkbox" id="handsFree">
+          <span class="track"><i></i></span>
+          <span class="tlabel">Hands-free<small>use headphones</small></span>
+        </label>
+      </div>
+      <div class="hint" id="hint">Press Start to begin &middot; then hold <kbd>Space</kbd> to talk, <kbd>Esc</kbd> to interrupt</div>
+    </div>
+  </section>
+
+  <aside class="board" aria-label="Whiteboard">
+    <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" aria-label="Resize whiteboard" tabindex="0"></div>
+    <div class="board-head">
+      <div class="board-top">
+        <div class="eyebrow"><span class="live-dot" aria-hidden="true"></span>Whiteboard<span class="live-tag">NEW</span></div>
+        <span class="steppill" id="stepPill" hidden></span>
+        <button class="chipbtn" id="autoBtn" aria-pressed="true" title="Let the mentor resize the whiteboard">Auto size</button>
+      </div>
+      <div class="board-tabs" id="boardTabs" role="tablist" aria-label="Previous boards"></div>
+    </div>
+    <div class="board-body" id="boardBody">
+      <div class="board-empty" id="boardEmpty">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H4zM8 20h8M12 16v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <p>Diagrams, tables and key points appear here while we talk.</p>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<div class="sheet" id="jumpSheet" role="dialog" aria-label="Jump to" hidden>
+  <div class="sheet-card">
+    <div class="sheet-head"><b>Jump to</b><button class="icon-btn sq" id="jumpClose" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button></div>
+    <ul class="daylist" id="dayList"></ul>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="/static/vendor/mermaid.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
