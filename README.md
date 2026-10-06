@@ -1,6 +1,12 @@
-# Study Mentor
+# Study Mentor: open-source AI voice tutor
 
-A local, voice-first personal tutor that runs on your own computer. You talk to it, it talks back, and it actually teaches you.
+[![License: MIT](https://img.shields.io/badge/license-MIT-2DD4BF.svg)](LICENSE) ![Python](https://img.shields.io/badge/python-3.11%2B-2DD4BF) ![Self-hosted](https://img.shields.io/badge/self--hosted-yes-2DD4BF)
+
+A free, self-hosted AI voice tutor with a live Mermaid whiteboard. You talk to it, it talks back, quizzes you, and draws the idea as it explains. Built for AWS Solutions Architect Professional (SAP-C02), LSAT and quant finance prep, and easy to point at any curriculum you provide.
+
+![Study Mentor screenshot](docs/screenshot.png)
+
+**Website:** https://stanley-n.com/study-mentor/ ·  Keywords: AI tutor, voice assistant, study app, SAP-C02, LSAT, quant interview, Kokoro TTS, faster-whisper, DeepSeek, FastAPI, Mermaid.
 
 ## What it does
 
