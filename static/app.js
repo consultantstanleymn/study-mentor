@@ -74,7 +74,7 @@
   async function changeDay(day) {
     const t = track(); if (!t || day < 1 || day > t.days) return;
     await jpost("/api/day", { track: t.id, day });
-    await loadState();
+    await loadState(); refreshResume();
     if (S.sessionActive) endSession(true);
   }
   el.trackSeg.addEventListener("click", (e) => {
@@ -140,6 +140,11 @@
       case "day_done": S.queue.push({ kind: "daydone", day: ev.day }); pump(); break;
       case "error": addTurn("err", "Mentor", ev.message); setState("idle", "Something went wrong"); toast(ev.message, 6000); break;
       case "done": S.genDone = true; pump(); break;
+      case "resumed":
+        el.transcript.innerHTML = "";
+        for (const m of ev.transcript) addTurn(m.role === "user" ? "you" : "mentor", m.role === "user" ? "You" : "Mentor", m.text);
+        if (ev.board) S.queue.push({ ...ev.board, kind: "board", style: ev.board.kind });
+        curTurnEl = null; pump(); break;
       case "ended": break;
     }
   }
@@ -284,6 +289,18 @@
     showCaption("One moment. Pulling today's lesson together.");
     syncCta();
   }
+  function resumeSession() {
+    const t = track(); if (!t || !S.wsReady) { toast("Connecting to the mentor. One moment."); return; }
+    stopPlayback(); S.sessionActive = true; S.genDone = false;
+    S.boards = []; el.boardBody.querySelectorAll(".bcard").forEach((n) => n.remove()); el.boardTabs.innerHTML = ""; el.boardEmpty.hidden = false; curTurnEl = null;
+    wsSend({ type: "resume", track: t.id, day: t.day, voice: S.voice, speed: S.speed });
+    setState("thinking", "Thinking"); showCaption("Welcome back. Picking up where we left off."); syncCta();
+  }
+  async function refreshResume() {
+    const t = track(); if (!t) return;
+    try { const r = await (await fetch(`/api/resume/${t.id}/${t.day}`)).json(); resumeBtn.hidden = !(r.available && !S.sessionActive); resumeBtn.textContent = `Resume where we left off (${r.turns || 0} turns)`; }
+    catch (e) { resumeBtn.hidden = true; }
+  }
   function syncCta() {
     const idle = !S.sessionActive;
     el.micBtn.classList.toggle("cta", idle);
@@ -292,6 +309,7 @@
     el.micBtn.setAttribute("aria-label", idle ? "Start session" : "Hold to talk (or hold Space)");
     startBtn.textContent = idle ? "Start session" : "End session"; startBtn.hidden = idle;
     el.suggest.classList.toggle("gone", !idle);
+    if (idle) refreshResume(); else resumeBtn.hidden = true;
     $("sessbar").hidden = idle; S.paused = false; $("pauseBtn").textContent = "Pause";
     el.hint.innerHTML = idle ? "Press Start to begin &middot; then hold <kbd>Space</kbd> to talk, <kbd>Esc</kbd> to interrupt" : "Hold <kbd>Space</kbd> to talk &middot; <kbd>Esc</kbd> to interrupt";
   }
@@ -307,6 +325,10 @@
   });
   $("endBtn").addEventListener("click", () => endSession());
   // The primary action lives in the Today card
+  const resumeBtn = document.createElement("button");
+  resumeBtn.className = "btn ghost resume-btn"; resumeBtn.hidden = true; resumeBtn.id = "resumeBtn";
+  el.suggest.parentNode.insertBefore(resumeBtn, el.suggest);
+  resumeBtn.addEventListener("click", resumeSession);
   const startBtn = document.createElement("button");
   startBtn.className = "btn ghost"; startBtn.id = "startBtn"; startBtn.textContent = "Start session"; startBtn.style.cssText = "width:100%;margin-top:14px";
   document.querySelector(".today").appendChild(startBtn);
@@ -471,7 +493,7 @@
   syncCta();
 
   /* ---------------- boot ---------------- */
-  loadState(false).then(() => {
+  loadState(false).then(() => { refreshResume();
     const t = track(); if (t) showCaption(t.title);
   }).catch((e) => toast("Cannot reach the mentor server: " + e.message, 8000));
   connect();

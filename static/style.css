@@ -440,3 +440,5 @@ input[type=range] { accent-color: var(--primary); min-height: 32px; }
 #gloss .gloss-r { display: grid; gap: 1px; font-size: 13px; line-height: 1.3; }
 #gloss .gloss-r b { color: var(--primary); font-weight: 600; }
 #gloss .gloss-r span { color: var(--text-2); }
+.resume-btn { align-self: center; margin: 0 auto 10px; border-radius: 999px; padding: 0 20px; min-height: 40px; color: var(--primary); border-color: rgba(45, 212, 191, .5); font-weight: 600; }
+.resume-btn[hidden] { display: none; }

@@ -2,6 +2,7 @@
 import asyncio
 import base64
 import json
+import time
 import threading
 from pathlib import Path
 
@@ -31,6 +32,29 @@ async def _startup():
 @app.get("/")
 async def index():
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})
+
+
+def _convo_key(track, day):
+    return f"convo:{track}:{day}"
+
+
+def _load_convo(track, day):
+    raw = db.get_kv(_convo_key(track, day))
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if data.get("messages") else None
+
+
+@app.get("/api/resume/{track}/{day}")
+async def resume_info(track: str, day: int):
+    data = _load_convo(track, day)
+    if not data:
+        return {"available": False}
+    return {"available": True, "turns": len(data["messages"]) // 2, "saved": data.get("saved"), "mode": data.get("mode")}
 
 
 @app.get("/api/state")
@@ -112,7 +136,12 @@ async def ws(sock: WebSocket):
     await sock.accept()
     conv: tutor.Conversation | None = None
     session_id: int | None = None
-    settings = {"voice": voice.DEFAULT_VOICE, "speed": 1.0}
+    settings = {"voice": voice.DEFAULT_VOICE, "speed": 1.0, "board": None}
+
+    def save_convo():
+        if conv and conv.messages:
+            db.set_kv(_convo_key(conv.track, conv.day), json.dumps(
+                {"messages": conv.messages[-60:], "board": settings["board"], "mode": conv.mode, "saved": time.time()}))
     turn = 0
     current: asyncio.Task | None = None
     loop = asyncio.get_running_loop()
@@ -148,6 +177,7 @@ async def ws(sock: WebSocket):
                                 "audio": base64.b64encode(wav).decode()})
                     seq += 1
                 elif kind == "board":
+                    settings["board"] = ev[1]
                     await send({"type": "board", "turn": my_turn, **ev[1]})
                 elif kind == "layout":
                     await send({"type": "layout", "turn": my_turn, "board": ev[1]})
@@ -157,6 +187,7 @@ async def ws(sock: WebSocket):
                     db.log_topic(conv.track, ev[1], ev[2])
                     await send({"type": "log", "turn": my_turn, "topic": ev[1], "result": ev[2]})
                 elif kind == "day_done":
+                    db.set_kv(_convo_key(conv.track, conv.day), "")
                     db.mark_day(conv.track, conv.day, "done")
                     await send({"type": "day_done", "turn": my_turn, "day": conv.day})
                 elif kind == "note":
@@ -169,6 +200,7 @@ async def ws(sock: WebSocket):
             await consume()
         finally:
             prod.cancel()
+        save_convo()
         await send({"type": "done", "turn": my_turn})
 
     async def cancel_current():
@@ -195,6 +227,27 @@ async def ws(sock: WebSocket):
                 session_id = db.start_session(track, day, mode)
                 turn += 1
                 current = asyncio.create_task(run_turn(None, True, turn))
+            elif t == "resume":
+                await cancel_current()
+                if session_id:
+                    db.end_session(session_id)
+                track, day = msg["track"], int(msg["day"])
+                saved = _load_convo(track, day)
+                settings["voice"] = msg.get("voice", settings["voice"])
+                settings["speed"] = float(msg.get("speed", settings["speed"]))
+                if not saved:
+                    await send({"type": "error", "turn": 0, "message": "Nothing to resume for this day."})
+                    continue
+                conv = tutor.Conversation(track, day, saved.get("mode", "teach"))
+                conv.messages = saved["messages"]
+                settings["board"] = saved.get("board")
+                session_id = db.start_session(track, day, conv.mode)
+                turn += 1
+                visible = [{"role": m["role"], "text": m["content"]} for m in conv.messages if not m["content"].startswith("(")]
+                await send({"type": "resumed", "turn": turn, "transcript": visible, "board": settings["board"]})
+                current = asyncio.create_task(run_turn(
+                    "(Stanley is back after a break. Welcome him back in one short sentence, recap in one sentence where you stopped, then continue exactly from there.)",
+                    False, turn))
             elif t == "user" and conv:
                 await cancel_current()
                 turn += 1
@@ -208,6 +261,7 @@ async def ws(sock: WebSocket):
                 settings["speed"] = float(msg.get("speed", settings["speed"]))
             elif t == "end":
                 await cancel_current()
+                save_convo()
                 if session_id:
                     db.end_session(session_id)
                     session_id = None
