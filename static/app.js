@@ -192,7 +192,7 @@
   function showCaption(text) {
     el.capLine.classList.add("fade");
     clearTimeout(capT);
-    capT = setTimeout(() => { el.capLine.textContent = text; el.capLine.classList.remove("fade"); }, 120);
+    capT = setTimeout(() => { el.capLine.textContent = text; el.capLine.classList.remove("fade", "dim"); }, 120);
   }
   function addTurn(kind, who, text) {
     const li = document.createElement("li"); li.className = `turn ${kind}`;
@@ -290,7 +290,7 @@
     el.micLabel.hidden = !idle;
     if (idle) el.micLabel.textContent = "Start session";
     el.micBtn.setAttribute("aria-label", idle ? "Start session" : "Hold to talk (or hold Space)");
-    startBtn.textContent = idle ? "Start session" : "End session";
+    startBtn.textContent = idle ? "Start session" : "End session"; startBtn.hidden = idle;
     el.suggest.classList.toggle("gone", !idle);
     el.hint.innerHTML = idle ? "Press Start to begin &middot; then hold <kbd>Space</kbd> to talk, <kbd>Esc</kbd> to interrupt" : "Hold <kbd>Space</kbd> to talk &middot; <kbd>Esc</kbd> to interrupt";
   }
@@ -466,7 +466,7 @@
 
   /* ---------------- boot ---------------- */
   loadState(false).then(() => {
-    const t = track(); if (t) showCaption(`${t.unit} ${t.day}: ${t.title}. Press Start session when you are ready.`);
+    const t = track(); if (t) showCaption(t.title);
   }).catch((e) => toast("Cannot reach the mentor server: " + e.message, 8000));
   connect();
 })();
