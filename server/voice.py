@@ -40,12 +40,31 @@ _ALNUM = re.compile(r"\b([A-Z]{1,5})(\d{1,3})\b")        # S3, EC2, SQS2
 _CAPS = re.compile(r"\b[A-Z]{2,6}s?\b")
 
 
+_LETTER = dict(zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "eigh bee see dee ee ef jee aitch eye jay kay ell em en oh pee cue ar ess tee you vee double-you ex why zee".split()))
+
+
+def _spell(word: str) -> str:
+    return " ".join(_LETTER.get(c, c) for c in word)
+
+
+_LIVE_VERB_BEFORE = r"(?:to|i|we|you|they|who|that|can|will|would|must|should|do|does|did|don't|still|and|or|people|users|teams)"
+_LIVE_ADJ_BEFORE = r"(?:go|goes|going|went|gone|is|are|was|were|be|stay|stays|staying|stayed|not)"
+_LIVE_NOT_ADJ_AFTER = r"(?:in|on|at|with|by|and|or|for|from|as|inside|within|there|here|a|an|the|it|them|this|that|,|\.)"
+
+
+def _fix_live(t: str) -> str:
+    t = re.sub(rf"\b({_LIVE_ADJ_BEFORE})\s+live\b", r"\1 lyve", t, flags=re.I)
+    t = re.sub(rf"\b({_LIVE_VERB_BEFORE})\s+live\b", r"\1 liv", t, flags=re.I)
+    t = re.sub(rf"\blive\s+(?!{_LIVE_NOT_ADJ_AFTER}\b)(?=[a-z])", "lyve ", t, flags=re.I)
+    return t
+
+
 def spoken_text(text: str) -> str:
     t = text.replace("&", " and ").replace("/", " slash ").replace("->", " to ").replace("→", " to ")
     t = re.sub(r"`|\*|_{1,2}|#", "", t)
 
     def alnum(m):
-        letters = " ".join(m.group(1))
+        letters = _spell(m.group(1))
         digits = " ".join(_DIGITS[d] for d in m.group(2))
         return f"{letters} {digits}"
 
@@ -56,9 +75,10 @@ def spoken_text(text: str) -> str:
         base = w[:-1] if w.endswith("s") and len(w) > 2 else w
         if base in _KEEP:
             return _KEEP[base] + ("s" if base != w else "")
-        return " ".join(base) + ("s" if base != w else "")
+        return _spell(base) + ("s" if base != w else "")
 
     t = _CAPS.sub(caps, t)
+    t = _fix_live(t)
     t = re.sub(r"\bvs\.?(?=\s|$)", "versus", t, flags=re.I)
     t = re.sub(r"\be\.g\.", "for example", t, flags=re.I)
     t = re.sub(r"\bi\.e\.", "that is", t, flags=re.I)

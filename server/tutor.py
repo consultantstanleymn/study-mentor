@@ -139,7 +139,10 @@ class Conversation:
     def _payload(self, user_text: str | None):
         msgs = [{"role": "system", "content": self.system}] + self.messages[-MAX_HISTORY:]
         if user_text is not None:
-            msgs.append({"role": "user", "content": user_text})
+            hint = ""
+            if re.search(r"\b(draw|diagram|whiteboard|board|sketch|visuali[sz]e|illustrate|mermaid|picture)\b", user_text, re.I):
+                hint = "\n\n(System note: he asked to see it. Emit a NEW <board> tag in this reply, with <layout board=\"wide\"/> first, then walk through it with <focus/> tags.)"
+            msgs.append({"role": "user", "content": user_text + hint})
         return {
             "model": MODEL,
             "messages": msgs,

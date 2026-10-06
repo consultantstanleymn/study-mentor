@@ -132,7 +132,7 @@
     if (ev.turn !== undefined) S.turn = ev.turn;
     switch (ev.type) {
       case "status": if (ev.state === "thinking") { S.genDone = false; setState("thinking", "Thinking"); } else if (ev.state === "idle") setState("idle", "Ready when you are"); break;
-      case "sentence": S.queue.push({ kind: "sentence", text: ev.text, audio: ev.audio }); pump(); break;
+      case "sentence": if (window.glossScan) glossScan(ev.text); S.queue.push({ kind: "sentence", text: ev.text, audio: ev.audio }); pump(); break;
       case "board": S.queue.push({ ...ev, kind: "board", style: ev.kind }); pump(); break;
       case "focus": S.queue.push({ kind: "focus", nodes: ev.nodes }); pump(); break;
       case "layout": S.queue.push({ kind: "layout", board: ev.board }); pump(); break;
@@ -292,14 +292,20 @@
     el.micBtn.setAttribute("aria-label", idle ? "Start session" : "Hold to talk (or hold Space)");
     startBtn.textContent = idle ? "Start session" : "End session"; startBtn.hidden = idle;
     el.suggest.classList.toggle("gone", !idle);
+    $("sessbar").hidden = idle; S.paused = false; $("pauseBtn").textContent = "Pause";
     el.hint.innerHTML = idle ? "Press Start to begin &middot; then hold <kbd>Space</kbd> to talk, <kbd>Esc</kbd> to interrupt" : "Hold <kbd>Space</kbd> to talk &middot; <kbd>Esc</kbd> to interrupt";
   }
   function endSession(silent) {
     wsSend({ type: "end" }); stopPlayback(); stopHandsFree(); S.sessionActive = false; S.genDone = true;
-    setState("idle", "Session ended"); syncCta();
+    setState("idle", "Session ended"); syncCta(); if (window.glossClear) glossClear();
     if (!silent) showCaption("Good work. See you next session.");
     loadState().catch(() => {});
   }
+  $("pauseBtn").addEventListener("click", () => {
+    if (!S.paused) { interrupt(); S.paused = true; $("pauseBtn").textContent = "Continue"; setState("idle", "Paused. Press Continue when ready."); }
+    else { S.paused = false; $("pauseBtn").textContent = "Pause"; sendUser("Please continue from exactly where we stopped."); }
+  });
+  $("endBtn").addEventListener("click", () => endSession());
   // The primary action lives in the Today card
   const startBtn = document.createElement("button");
   startBtn.className = "btn ghost"; startBtn.id = "startBtn"; startBtn.textContent = "Start session"; startBtn.style.cssText = "width:100%;margin-top:14px";

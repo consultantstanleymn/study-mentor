@@ -98,6 +98,11 @@
 
     <ol class="transcript" id="transcript" aria-label="Transcript" role="log" aria-live="polite"></ol>
 
+    <div class="sessbar" id="sessbar" hidden>
+      <button class="btn ghost" id="pauseBtn" type="button">Pause</button>
+      <button class="btn danger" id="endBtn" type="button">End session</button>
+    </div>
+
     <div class="dock">
       <form class="typebox" id="typeForm" autocomplete="off">
         <label class="sr" for="typeIn">Type a message</label>
@@ -155,5 +160,6 @@
 <script src="/static/vendor/mermaid.min.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/reminders.js"></script>
+<script src="/static/glossary.js"></script>
 </body>
 </html>
