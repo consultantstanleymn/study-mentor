@@ -10,7 +10,7 @@ import prompts
 
 API_URL = os.environ.get("MENTOR_API_URL", "https://api.deepseek.com/chat/completions")
 MODEL = os.environ.get("MENTOR_MODEL", "deepseek-v4-pro")
-KEY_FILE = Path(os.environ.get("MENTOR_KEY_FILE", Path.home() / ".config" / "buddi" / "deepseek.key"))
+KEY_FILE = Path(os.environ.get("MENTOR_KEY_FILE", Path.home() / ".config" / "study-mentor" / "deepseek.key"))
 MAX_HISTORY = 28  # messages kept besides the system prompt
 
 

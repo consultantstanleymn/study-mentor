@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-KOKORO_DIR = Path(os.environ.get("MENTOR_KOKORO_DIR", Path.home() / "buddi" / "tts"))
+KOKORO_DIR = Path(os.environ.get("MENTOR_KOKORO_DIR", Path.home() / ".local" / "share" / "study-mentor" / "tts"))
 WHISPER_MODEL = os.environ.get("MENTOR_WHISPER", "base.en")  # small.en is more accurate but about 3x slower on a laptop CPU
 DEFAULT_VOICE = os.environ.get("MENTOR_VOICE", "bm_george")
 

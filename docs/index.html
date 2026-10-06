@@ -501,16 +501,16 @@
         <ol>
           <li><strong>Clone the repository</strong> and enter the directory.</li>
           <li><strong>Create a virtual environment</strong> and install dependencies.</li>
-          <li><strong>Add your API key</strong> to <code>~/.config/buddi/deepseek.key</code>.</li>
-          <li><strong>Download TTS models</strong> into <code>~/buddi/tts</code>.</li>
+          <li><strong>Add your API key</strong> to <code>~/.config/study-mentor/deepseek.key</code>.</li>
+          <li><strong>Download TTS models</strong> into <code>~/.local/share/study-mentor/tts</code>.</li>
           <li><strong>Run the server</strong> and open the local URL.</li>
         </ol>
         <pre><code id="install-code">git clone https://github.com/consultantstanleymn/study-mentor.git
 cd study-mentor
 python -m venv venv
 venv/bin/pip install fastapi "uvicorn[standard]" httpx beautifulsoup4 lxml faster-whisper numpy soundfile kokoro-onnx python-multipart
-put your API key in ~/.config/buddi/deepseek.key
-download kokoro-v1.0.onnx and voices-v1.0.bin into ~/buddi/tts
+put your API key in ~/.config/study-mentor/deepseek.key
+download kokoro-v1.0.onnx and voices-v1.0.bin into ~/.local/share/study-mentor/tts
 ./run.sh
 open http://127.0.0.1:8765</code></pre>
         <button class="copy-btn" id="copy-button" aria-label="Copy installation commands">

@@ -19,7 +19,7 @@ BASE = "http://127.0.0.1:8765"
 HOME = Path.home()
 SCHEDULE = HOME / ".config/study-mentor/schedule.json"
 FIRED = HOME / ".local/state/study-mentor/fired.json"
-RUN_SH = "/home/stanleysujithnelavala/study-mentor/run.sh"
+RUN_SH = str(Path(__file__).resolve().parent.parent / "run.sh")
 DEFAULT = {
     "reminders": [
         {"id": "aws", "time": "19:30", "days": [0, 1, 2, 3, 4], "track": "aws", "enabled": True},

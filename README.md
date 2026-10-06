@@ -53,12 +53,12 @@ cd study-mentor
 python -m venv venv
 venv/bin/pip install fastapi "uvicorn[standard]" httpx beautifulsoup4 lxml faster-whisper numpy soundfile kokoro-onnx python-multipart PySide6-Essentials
 
-mkdir -p ~/buddi/tts
-# Download kokoro-v1.0.onnx and voices-v1.0.bin into ~/buddi/tts
+mkdir -p ~/.local/share/study-mentor/tts
+# Download kokoro-v1.0.onnx and voices-v1.0.bin into ~/.local/share/study-mentor/tts
 # See: https://github.com/thewh1teagle/kokoro-onnx
 
-mkdir -p ~/.config/buddi
-echo "YOUR_KEY" > ~/.config/buddi/deepseek.key
+mkdir -p ~/.config/study-mentor
+echo "YOUR_KEY" > ~/.config/study-mentor/deepseek.key
 
 ./run.sh
 ```
@@ -72,11 +72,11 @@ Set these environment variables before running, or export them in your shell pro
 | Variable | Default | Description |
 |---|---|---|
 | `MENTOR_API_KEY` | unset | API key for the language model. If unset, the key is read from `MENTOR_KEY_FILE`. |
-| `MENTOR_KEY_FILE` | `~/.config/buddi/deepseek.key` | Path to a file containing the API key. |
+| `MENTOR_KEY_FILE` | `~/.config/study-mentor/deepseek.key` | Path to a file containing the API key. |
 | `MENTOR_API_URL` | `https://api.deepseek.com/chat/completions` | OpenAI-compatible chat completions endpoint. |
 | `MENTOR_MODEL` | `deepseek-v4-pro` | Model name to request from the API. |
 | `MENTOR_WHISPER` | `base.en` | faster-whisper model. Use `small.en` for better accuracy at the cost of speed. |
-| `MENTOR_KOKORO_DIR` | `~/buddi/tts` | Directory containing `kokoro-v1.0.onnx` and `voices-v1.0.bin`. |
+| `MENTOR_KOKORO_DIR` | `~/.local/share/study-mentor/tts` | Directory containing `kokoro-v1.0.onnx` and `voices-v1.0.bin`. |
 
 Available Kokoro voices include `bm_george`, `bm_lewis`, and `bf_emma`. The voice is configurable in the app's Voice settings.
 

@@ -425,3 +425,6 @@ input[type=range] { accent-color: var(--primary); min-height: 32px; }
 .today #phase { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stage:has(.transcript:empty) .avatar-wrap { margin-top: auto; }
 .stage:has(.transcript:empty) .suggest { margin-bottom: auto; }
+.status { background: transparent; border-color: transparent; color: var(--muted); font-size: 13px; }
+.side { padding-bottom: 20px; }
+.board-empty { color: var(--muted); opacity: .85; }
