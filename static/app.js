@@ -286,6 +286,7 @@
     el.transcript.innerHTML = ""; S.boards = []; el.boardBody.querySelectorAll(".bcard").forEach((n) => n.remove()); el.boardTabs.innerHTML = ""; el.boardEmpty.hidden = false; curTurnEl = null;
     wsSend({ type: "start", track: t.id, day: t.day, mode: S.mode, voice: S.voice, speed: S.speed });
     setState("thinking", "Thinking");
+    if (S.handsFree) startHandsFree();
     showCaption("One moment. Pulling today's lesson together.");
     syncCta();
   }
@@ -294,7 +295,7 @@
     stopPlayback(); S.sessionActive = true; S.genDone = false;
     S.boards = []; el.boardBody.querySelectorAll(".bcard").forEach((n) => n.remove()); el.boardTabs.innerHTML = ""; el.boardEmpty.hidden = false; curTurnEl = null;
     wsSend({ type: "resume", track: t.id, day: t.day, voice: S.voice, speed: S.speed });
-    setState("thinking", "Thinking"); showCaption("Welcome back. Picking up where we left off."); syncCta();
+    setState("thinking", "Thinking"); showCaption("Welcome back. Picking up where we left off."); syncCta(); if (S.handsFree) startHandsFree();
   }
   async function refreshResume() {
     const t = track(); if (!t) return;
@@ -314,7 +315,7 @@
     el.hint.innerHTML = idle ? "Press Start to begin &middot; then hold <kbd>Space</kbd> to talk, <kbd>Esc</kbd> to interrupt" : "Hold <kbd>Space</kbd> to talk &middot; <kbd>Esc</kbd> to interrupt";
   }
   function endSession(silent) {
-    wsSend({ type: "end" }); stopPlayback(); stopHandsFree(); S.sessionActive = false; S.genDone = true;
+    wsSend({ type: "end" }); stopPlayback(); stopHandsFree(); releaseMic(); S.sessionActive = false; S.genDone = true;
     setState("idle", "Session ended"); syncCta(); if (window.glossClear) glossClear();
     if (!silent) showCaption("Good work. See you next session.");
     loadState().catch(() => {});
@@ -376,7 +377,7 @@
     mic.ring.push(chunk); ringLen += chunk.length;
     while (ringLen - mic.ring[0].length > mic.ringMax) { ringLen -= mic.ring[0].length; mic.ring.shift(); }
     if (mic.rec) mic.rec.push(chunk);
-    if (!S.handsFree || S.recordingPtt) return;
+    if (!S.handsFree || S.recordingPtt || !S.sessionActive || S.paused) return;
     const level = rms(chunk), dur = chunk.length / mic.rate;
     const speaking = S.playing || S.audio; // mentor is talking: need a louder voice to barge in
     const thresh = Math.max(0.02, vad.floor * 4) * (speaking ? 2.2 : 1);
@@ -447,8 +448,14 @@
   document.addEventListener("keyup", (e) => { if (e.code === "Space") pttUp(); });
 
   // hands-free
-  async function startHandsFree() { if (!S.handsFree) return; if (!(await ensureMic())) { el.handsFree.checked = false; S.handsFree = false; return; } setMicUi(false); }
+  async function startHandsFree() { if (!S.handsFree || !S.sessionActive) return; if (!(await ensureMic())) { el.handsFree.checked = false; S.handsFree = false; return; } setMicUi(false); }
   function stopHandsFree() { vad.active = false; vad.speech = 0; if (!S.recordingPtt) mic.rec = null; setMicUi(false); }
+  function releaseMic() { // fully close the microphone so nothing listens outside a session
+    S.recordingPtt = false; mic.rec = null; mic.ring = [];
+    try { if (mic.stream) mic.stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+    try { if (mic.ctx) mic.ctx.close(); } catch (e) {}
+    mic.ctx = null; mic.node = null; mic.stream = null;
+  }
   el.handsFree.addEventListener("change", async () => {
     S.handsFree = el.handsFree.checked;
     if (S.handsFree) { await startHandsFree(); if (S.handsFree) toast("Hands-free on. Use headphones so I do not hear myself.", 4500); } else stopHandsFree();
