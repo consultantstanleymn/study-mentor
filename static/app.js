@@ -221,7 +221,7 @@
 
   /* ---------------- whiteboard ---------------- */
   if (window.mermaid) mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict", fontFamily: "Inter, system-ui, sans-serif", flowchart: { useMaxWidth: true, htmlLabels: true, nodeSpacing: 28, rankSpacing: 38, padding: 10 },
-    themeVariables: { fontSize: "17px", background: "#112124", primaryColor: "#172C30", primaryBorderColor: "#2DD4BF", primaryTextColor: "#E8F5F2", lineColor: "#5EEAD4", secondaryColor: "#0C1719", tertiaryColor: "#0C1719" } });
+    themeVariables: { fontSize: "17px", background: "#1A1F33", primaryColor: "#232A44", primaryBorderColor: "#8FA0F5", primaryTextColor: "#ECEEF8", lineColor: "#B4C0FF", secondaryColor: "#12152A", tertiaryColor: "#12152A" } });
   let mid = 0;
   async function addBoard(b) {
     el.boardEmpty && (el.boardEmpty.hidden = true);
