@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS weak (
   PRIMARY KEY (track, topic));
 CREATE TABLE IF NOT EXISTS notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT, track TEXT, day INTEGER, note TEXT, created REAL);
+CREATE TABLE IF NOT EXISTS coverage (
+  track TEXT, day INTEGER, section TEXT, created REAL, PRIMARY KEY (track, day, section));
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, track TEXT, day INTEGER, mode TEXT, started REAL, ended REAL);
 """
@@ -97,7 +99,7 @@ def weak_topics(track: str, limit: int = 6) -> list[dict]:
 
 def add_note(track: str, day: int, note: str):
     with conn() as c:
-        c.execute("INSERT INTO notes(track,day,note,created) VALUES(?,?,?,?)", (track, day, note.strip()[:400], time.time()))
+        c.execute("INSERT INTO notes(track,day,note,created) VALUES(?,?,?,?)", (track, day, note.strip()[:700], time.time()))
 
 
 def recent_notes(track: str, limit: int = 5) -> list[dict]:
@@ -136,3 +138,24 @@ def stats(track: str) -> dict:
             break
         cursor -= 86400
     return {"minutes": round(mins / 60), "streak": streak}
+
+
+def mark_covered(track: str, day: int, section: str):
+    with conn() as c:
+        c.execute("INSERT OR IGNORE INTO coverage(track,day,section,created) VALUES(?,?,?,?)", (track, day, section.strip(), time.time()))
+
+
+def covered_sections(track: str, day: int) -> set[str]:
+    with conn() as c:
+        return {r["section"] for r in c.execute("SELECT section FROM coverage WHERE track=? AND day=?", (track, day))}
+
+
+def days_with_coverage(track: str) -> set[int]:
+    with conn() as c:
+        return {r["day"] for r in c.execute("SELECT DISTINCT day FROM coverage WHERE track=?", (track,))}
+
+
+def day_status(track: str, day: int) -> str | None:
+    with conn() as c:
+        r = c.execute("SELECT status FROM day_progress WHERE track=? AND day=?", (track, day)).fetchone()
+    return r["status"] if r else None

@@ -137,6 +137,7 @@
       case "focus": S.queue.push({ kind: "focus", nodes: ev.nodes }); pump(); break;
       case "layout": S.queue.push({ kind: "layout", board: ev.board }); pump(); break;
       case "log": refreshSoon(); break;
+      case "day_blocked": toast("Not everything is covered yet. The rest carries to tomorrow.", 4500); break;
       case "day_done": S.queue.push({ kind: "daydone", day: ev.day }); pump(); break;
       case "error": addTurn("err", "Mentor", ev.message); setState("idle", "Something went wrong"); toast(ev.message, 6000); break;
       case "done": S.genDone = true; pump(); break;

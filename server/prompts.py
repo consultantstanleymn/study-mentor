@@ -53,6 +53,7 @@ TAGS (hidden machinery; never mention or explain them; they are removed from spe
 - Topic tracking: after you judge one of his answers, emit <log topic="short topic name" result="hit"/> or result="miss". Use stable, short topic names such as "SCP inheritance" or "Necessary vs sufficient". Only log real judgments.
 - Day complete: when the day's (or week's) material has been taught and he shows a reasonable grasp (a drill is NOT required in teach mode), say so in your closing recap and emit <day_done/> in that same reply so the day is marked complete automatically. If he says he is done or wants to wrap up after covering the material, emit it too. Do not wait for perfection.
 - Whenever his latest message is an answer to something you asked (a quiz option, an explanation he attempted, a method step), you MUST begin your reply with a <log topic="..." result="hit"/> or result="miss" tag, before any speech. No exceptions. Use a <board> whenever you introduce a decision boundary, a comparison of two or more services or options, a sequence, or an argument structure. Boards make him see it; use them early in a lesson, not never.
+- Coverage: the lesson page is split into sections with ids (listed under COVERAGE below). When you have finished teaching a section (not just mentioned it) and he has followed it, emit <covered section="the-id"/> in that reply. Teach every section; never skip one. For carried-over sections from earlier days (ids look like d3:foundations), emit <covered section="d3:foundations"/> once you have re-taught them.
 - Session note: at the end of a session emit <note>one sentence on where he is and what to start with next time</note>.
 """
 
@@ -100,6 +101,32 @@ def question_bank(track: str, day: int, limit: int = 20) -> str:
     return "\n".join(out)
 
 
+def coverage_block(track: str, day: int) -> str:
+    """Fresh every turn: which sections of today are done, what is left, and what earlier days still owe."""
+    import progress
+    secs = progress.sections_of(track, day)
+    done = db.covered_sections(track, day)
+    left = [s for s in secs if s["id"] not in done]
+    out = ["=== COVERAGE (live) ==="]
+    out.append("Covered today: " + (", ".join(s["id"] for s in secs if s["id"] in done) or "nothing yet"))
+    out.append("Still to teach today (in order): " + ("; ".join(f"[{s['id']}] {s['title']}" for s in left) or "none, everything is covered"))
+    items, total = progress.backlog(track, day)
+    if items:
+        out.append(f"CARRIED OVER from earlier days ({total} section(s) skipped or only partly covered). Before new material, tell him in one sentence that he has catch-up items, then work them in, oldest first, one at a time, as short refreshers. Items:")
+        for i in items[:6]:
+            note = " (whole day was skipped)" if i["skipped"] else ""
+            out.append(f"- d{i['day']}:{i['id']} {i['title']}{note}")
+        out.append("Source text for the first carried items (private, re-teach in your own words):")
+        for i in items[:3]:
+            d = content.load_day(track, i["day"])
+            sec = next((x for x in d["sections"] if x["id"] == i["id"]), None) if d else None
+            if sec:
+                out.append(f"[d{i['day']}:{i['id']}] {sec['text'][:1200]}")
+        out.append("To teach a carried item, use the material of that earlier day, which you may know from the curriculum; keep it brief and emit its covered tag when done.")
+    out.append("RULE: emit <day_done/> only when 'Still to teach today' is none. If it is not none, the day is NOT complete; keep teaching the remaining sections, or if he wants to stop, say what carries over to tomorrow.")
+    return "\n".join(out)
+
+
 def system_prompt(track: str, day: int, mode: str) -> str:
     lesson = content.lesson_text(track, day)
     weak = db.weak_topics(track)
@@ -113,8 +140,8 @@ def system_prompt(track: str, day: int, mode: str) -> str:
         TRACK_NOTES[track],
         MODE_RULES.get(mode, MODE_RULES["teach"]),
         f"STUDENT STATE: {content.TRACKS[track]['unit'].lower()} {day} of {content.TRACKS[track]['days']} in this track. Study streak: {st['streak']} day(s). Total study time logged: {st['minutes']} min.",
-        f"WEAK TOPICS (missed more than hit): {weak_s}",
-        f"RECENT SESSION NOTES:\n{notes_s}",
+        f"MISTAKES CARRIED FORWARD (missed more than hit; re-test these early today with a fresh scenario, log hit or miss, and a topic only clears once he gets it right): {weak_s}",
+        f"RECENT SESSION DEBRIEFS (what he learned, what went wrong, where to start):\n{notes_s}",
         "=== TODAY'S MATERIAL (private source; do not read aloud) ===\n" + lesson,
         "=== TODAY'S QUESTION BANK ===\n" + question_bank(track, day),
     ]

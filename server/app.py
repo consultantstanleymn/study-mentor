@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 import content
 import db
+import progress
 import tutor
 import voice
 from schedule import router as schedule_router
@@ -47,6 +48,21 @@ def _load_convo(track, day):
     except ValueError:
         return None
     return data if data.get("messages") else None
+
+
+async def _debrief(track, day, messages):
+    try:
+        note = await tutor.debrief(track, day, messages)
+        if note:
+            db.add_note(track, day, note)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@app.get("/api/coverage/{track}/{day}")
+async def coverage(track: str, day: int):
+    items, total = progress.backlog(track, day)
+    return {"left_today": [x["title"] for x in progress.remaining(track, day)], "carried": items, "carried_total": total}
 
 
 @app.get("/api/resume/{track}/{day}")
@@ -186,10 +202,25 @@ async def ws(sock: WebSocket):
                 elif kind == "log":
                     db.log_topic(conv.track, ev[1], ev[2])
                     await send({"type": "log", "turn": my_turn, "topic": ev[1], "result": ev[2]})
+                elif kind == "covered":
+                    sec = ev[1]
+                    d, _, sid = sec.partition(":") if sec[:1] == "d" and ":" in sec else (str(conv.day), "", sec)
+                    try:
+                        db.mark_covered(conv.track, int(d.lstrip("d")), sid)
+                    except ValueError:
+                        db.mark_covered(conv.track, conv.day, sec)
                 elif kind == "day_done":
-                    db.set_kv(_convo_key(conv.track, conv.day), "")
-                    db.mark_day(conv.track, conv.day, "done")
-                    await send({"type": "day_done", "turn": my_turn, "day": conv.day})
+                    left = progress.remaining(conv.track, conv.day)
+                    if left:
+                        conv.hint = ("(System: day_done was REFUSED. These sections are not covered yet: "
+                                     + "; ".join(f"[{x['id']}] {x['title']}" for x in left)
+                                     + ". Tell him honestly, and teach the next one now.)")
+                        await send({"type": "day_blocked", "turn": my_turn, "left": [x["title"] for x in left]})
+                    else:
+                        db.set_kv(_convo_key(conv.track, conv.day), "")
+                        db.mark_day(conv.track, conv.day, "done")
+                        await send({"type": "day_done", "turn": my_turn, "day": conv.day})
+                        asyncio.create_task(_debrief(conv.track, conv.day, list(conv.messages)))
                 elif kind == "note":
                     db.add_note(conv.track, conv.day, ev[1])
                 elif kind == "error":
@@ -262,6 +293,8 @@ async def ws(sock: WebSocket):
             elif t == "end":
                 await cancel_current()
                 save_convo()
+                if conv and sum(1 for m in conv.messages if m["role"] == "user") >= 3:
+                    asyncio.create_task(_debrief(conv.track, conv.day, list(conv.messages)))
                 if session_id:
                     db.end_session(session_id)
                     session_id = None

@@ -24,7 +24,7 @@ class TagParser:
     """Splits a token stream into speech text and hidden tags (board, log, day_done, note)."""
 
     PAIRED = ("board", "note")
-    SELF = ("log", "day_done", "focus", "layout")
+    SELF = ("log", "day_done", "focus", "layout", "covered")
 
     def __init__(self):
         self.buf = ""
@@ -46,7 +46,7 @@ class TagParser:
             if i > 0:
                 yield ("speech", self.buf[:i])
                 self.buf = self.buf[i:]
-            m = re.match(r"<(board|note|log|day_done|focus|layout)\b", self.buf)
+            m = re.match(r"<(board|note|log|day_done|focus|layout|covered)\b", self.buf)
             if not m:
                 # could still be a partial tag name like "<boa"
                 if not final and any(t.startswith(self.buf[1:]) for t in self.PAIRED + self.SELF) and len(self.buf) < 12:
@@ -70,6 +70,8 @@ class TagParser:
                     yield ("focus", attrs.get("nodes", ""))
                 elif name == "layout":
                     yield ("layout", attrs.get("board", "normal"))
+                elif name == "covered":
+                    yield ("covered", attrs.get("section", ""))
                 else:
                     yield ("day_done",)
             else:
@@ -135,9 +137,12 @@ class Conversation:
         self.track, self.day, self.mode = track, day, mode
         self.system = prompts.system_prompt(track, day, mode)
         self.messages: list[dict] = []
+        self.hint = ""  # one-shot system note for the next turn (e.g. a refused day_done)
 
     def _payload(self, user_text: str | None):
-        msgs = [{"role": "system", "content": self.system}] + self.messages[-MAX_HISTORY:]
+        msgs = [{"role": "system", "content": self.system + "\n\n" + prompts.coverage_block(self.track, self.day)}] + self.messages[-MAX_HISTORY:]
+        if self.hint:
+            msgs.append({"role": "system", "content": self.hint}); self.hint = ""
         if user_text is not None:
             hint = ""
             if re.search(r"\b(draw|diagram|whiteboard|board|sketch|visuali[sz]e|illustrate|mermaid|picture)\b", user_text, re.I):
@@ -209,3 +214,16 @@ class Conversation:
                 self.messages.append({"role": "user", "content": user_text})
             if reply:
                 self.messages.append({"role": "assistant", "content": reply})
+
+
+async def debrief(track: str, day: int, messages: list[dict]) -> str:
+    """One cheap non-streaming call after a session: what he learned, what he got wrong, where to start next time."""
+    convo = "\n".join(f"{'Stanley' if m['role'] == 'user' else 'Mentor'}: {m['content']}" for m in messages[-40:] if not m["content"].startswith("("))
+    ask = ("Write a 3 part debrief of this tutoring session for the next session's mentor. Format exactly: "
+           "'Learned: <topics he now understands, comma separated>. Mistakes: <concepts he got wrong or was shaky on, or none>. "
+           "Start next time with: <one concrete thing>.' Plain text, under 90 words, only what actually happened.")
+    body = {"model": MODEL, "messages": [{"role": "system", "content": ask}, {"role": "user", "content": convo}],
+            "thinking": {"type": "disabled"}, "temperature": 0.2, "max_tokens": 220}
+    async with httpx.AsyncClient(timeout=40) as client:
+        r = await client.post(API_URL, headers={"Authorization": f"Bearer {api_key()}"}, json=body)
+        return r.json()["choices"][0]["message"]["content"].strip()
