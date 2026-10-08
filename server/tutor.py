@@ -183,7 +183,8 @@ def content_title(track: str, day: int) -> str:
 
 OFFER = re.compile(r"(want (me )?to|want an|ready\?|shall we|should (we|i)|make sense|sound (good|doable|fair)|does that (connect|land|help)|any questions|better\?|clear\?)", re.I)
 PRAISE = re.compile(r"^(exactly|perfect|precisely|that'?s (exactly )?right|correct|yes[,.!]|great|spot on|right[,.!])", re.I)
-MACHINERY = re.compile(r"\b(mark(ing|ed)?|log(ging|ged)?|record(ing|ed)?|sav(e|ing|ed))\b[^.?!]{0,40}\b(cover(ed)?|section|that|this|answer|correct(ly)?|progress|miss|hit|complete|done|day|today)\b|\bI('ve| have) covered\b|\bsection[^.?!]{0,30}\bcovered\b", re.I)
+MACHINERY = re.compile(r"\b(I'?ll|I will|I'?m|I am|let me|I'?ve|I have|going to|gonna|now)\s+(just\s+)?(mark(ing|ed)?|log(ging|ged)?|record(ing|ed)?|sav(e|ing|ed))\b[^.?!]{0,40}\b(cover(ed)?|section|that|this|answer|correct(ly)?|progress|miss|hit|complete|done|day|today)\b|\bI('ve| have) covered\b|\bsection[^.?!]{0,30}\bcovered\b", re.I)
+HW_STATEMENT = re.compile(r"\b(for homework|your homework|homework for (today|tonight)|here'?s your homework|your assignment (is|for))\b", re.I)
 HW_PROMISE = re.compile(r"\b(your homework (is|for)|homework for (today|tonight)|for homework|your assignment (is|for)|I'?ll|I will|I'?ve|I have|let me|I'?m going to|going to)\b[^.?!]{0,40}\b(add|put|added|assign|assigned|give|save|drop)\b[^.?!]{0,50}\b(list|to-?do|homework|assignment)", re.I)
 BOARD_PROMISE = re.compile(r"(look at the board|(see|on|check|at) the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
 
@@ -195,6 +196,17 @@ GRADE_WORDS = re.compile(r"\b(that'?s|that was|it'?s|a|clean|logged as|graded as
 NAME = re.compile(r",?\s*\bStanley\b(?=[,.!?]|\s)[,.]?", re.I)
 PURE_Q = re.compile(r"^(so )?(what|why|how|can|could|does|do|is|are|should|would|when|where|which|who)\b[^.]{0,120}\?$", re.I)
 COMPREHENSION = re.compile(r"(make sense|does that (land|click|connect|help)|sound (good|right|fair)|got it\?|clear so far|follow(ing)? so far|ok(ay)?\?$)", re.I)
+ERRATA_TRAPS = [
+    (re.compile(r"\b(creates?|provisions?|sets? up|builds?)\b[^.]{0,50}\bthree\b[^.]{0,30}\baccounts\b", re.I),
+     "You said Control Tower creates three accounts. Correct: the management account already exists; Control Tower creates the log archive and audit accounts in the Security OU."),
+    (re.compile(r"\btwo (enforcement |guardrail |control )?flavou?rs\b", re.I),
+     "You said controls come in two flavors. Correct: three behaviors, preventive (SCPs), detective (Config rules) and proactive (CloudFormation Hooks)."),
+    (re.compile(r"caller'?s SCPs? appl(y|ies),? not the target", re.I),
+     "You said the caller's SCPs apply, not the target's. Correct: an SCP constrains the principals of the account it applies to; an assumed role is a principal of the role's account, so the target account's SCPs apply to it."),
+    (re.compile(r"\b(30|thirty)[- ]plus (question )?types\b", re.I),
+     "Do not state a count of LSAT question types; just name the types you are teaching."),
+]
+PURE_Q_SO = re.compile(r"^so (if|would|does|is|do|are|should|could|can)\b[^.]{0,200}\?$", re.I)
 ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
 MAX_SENTENCES = 6
 
@@ -210,6 +222,25 @@ class Conversation:
                 + (f"Flaw: {verdict[3]} " if verdict[1] == "miss" and verdict[3] else "")
                 + "Say it in plain words in your first two sentences (never the words hit, miss or graded). On a hit give one specific reason in at most 8 words. "
                   "Quote his words only if it was a miss; never invent an error he did not make. Do NOT emit a <log> tag." + warm + ")")
+
+    def _gate_cover(self, sid: str) -> bool:
+        """Single choke point for marking a section covered: needs HIT evidence on at least half its skills, one section per turn."""
+        import progress as _pr
+        if sid == "__l3__":
+            return True
+        if self.cover_flag:
+            return False
+        ids = {x["id"] for x in _pr.sections_of(self.track, self.day)}
+        if ":" in sid or sid not in ids:
+            return ":" in sid   # carried-over sections from earlier days pass through
+        meta = _pr.section_meta(self.track, self.day).get(sid, {})
+        sk = [x.lower() for x in meta.get("skills", [])]
+        if meta.get("kind", "teach") == "teach" and sk:
+            need = 1
+            if sum(1 for x in sk if x in self.hit_skills) < need:
+                self.dbg.append(("cover-blocked", sid)); return False
+        self.cover_flag = True
+        return True
 
     def _record(self, topic: str, result: str, level: int):
         """Update session counters for one graded answer; yields covered events (hit-backed, at most one section per turn)."""
@@ -231,7 +262,7 @@ class Conversation:
             done_now = prompts.db.covered_sections(self.track, self.day)
             for sec in _pr.sections_of(self.track, self.day):
                 sk = [x.lower() for x in meta.get(sec["id"], {}).get("skills", [])]
-                if sk and sec["id"] not in done_now and meta[sec["id"]].get("kind") == "teach" and sum(1 for x in sk if x in self.hit_skills) / len(sk) >= 0.6:
+                if sk and sec["id"] not in done_now and meta[sec["id"]].get("kind") == "teach" and self._gate_cover(sec["id"]):
                     yield ("covered", sec["id"])
                     break
 
@@ -334,6 +365,10 @@ class Conversation:
                         "question about a pitfall or concept (look-ahead bias, Sharpe, survivorship), NOT more return arithmetic. Do not explain until he commits.)")
             self.l3_cov_mark = cov
             self.fallback_cd = 6
+        if self.item:
+            it = self.item["it"]
+            out += ("\n\n(System: the practice item currently on his board, keep everything you say consistent with it and do not post another board until it is resolved. "
+                    f"STEM: {it['stem']} OPTIONS: {json.dumps(it.get('options') or {})} KEY: {it['answer']}. Do not reveal the key or traps until he commits to a letter.)")
         left = progress.remaining(self.track, self.day)
         struggling = sum(1 for r in self.recent if r != "hit") >= 2
         if left and self.turns_since_cov >= 5 and self.turns >= 6 and not struggling:
@@ -392,6 +427,7 @@ class Conversation:
         self.name_turn = -10
         self.leak_shingles = set()
         self.recent = []
+        self.cover_flag = False
         self.hit_skills = set()
         self.dbg = []
         self.item_last_skill = None
@@ -472,6 +508,7 @@ class Conversation:
         prev = next((m["content"] for m in reversed(self.messages) if m["role"] == "assistant"), "")
         verdict = None
         item_board = None
+        self.cover_flag = False
         self.unsure_v = None
         answer_turn = False
         real_answer = user_text and not opener and not user_text.startswith("(")
@@ -493,7 +530,7 @@ class Conversation:
         elif real_answer and prev.rstrip().endswith("?") and ASSENT.match(user_text.strip()) and not OFFER.search(prev[-160:]):
             self.verdict_note = "(He only said okay or sure and did not answer your question. Do not rule on anything. Re-ask it more simply, or give a smaller first step.)"
         elif (real_answer and prev.rstrip().endswith("?")
-                and not ASSENT.match(user_text.strip()) and not PURE_Q.match(user_text.strip()) and not OFFER.search(prev[-160:])):
+                and not ASSENT.match(user_text.strip()) and not PURE_Q.match(user_text.strip()) and not PURE_Q_SO.match(user_text.strip()) and not OFFER.search(prev[-160:])):
             answer_turn = True
             import db, progress as _pg
             known = _pg.skills_for_day(self.track, self.day) + [m["topic"] for m in db.mastery_map(self.track, 40)]
@@ -535,6 +572,13 @@ class Conversation:
                         yield e2
                     yield ("log", topic, "hit" if ev[2] == "hit" else "miss", lvl, "mentor")
                     continue
+                if ev[0] == "covered":
+                    if self._gate_cover(ev[1]):
+                        yield ev
+                    continue
+                if ev[0] == "board" and (self.item or item_board):
+                    self.dbg.append(("board-dropped", ev[1].get("title", "")))
+                    continue
                 if ev[0] in ("todo", "board"):
                     emitted[ev[0]] = True
                 if ev[0] == "speech":
@@ -547,10 +591,13 @@ class Conversation:
                             s = NAME.sub("", s).strip()
                         elif NAME.search(s):
                             self.name_turn = self.turns
+                        trap = next((fix for rx, fix in ERRATA_TRAPS if rx.search(s)), None)
+                        if trap:
+                            self.dbg.append(("errata-trap", s)); self.fact_note = trap; s = ""
                         if s and re.fullmatch(r"(so )?(does that |do you )?(make sense|follow|get it|see (that|what i mean))( so far)?\??|(sound|does that sound) (good|right|fair)\??|(is that )?(clear|ok(ay)?)( so far)?\??", s.strip(" ."), re.I):
                             s = ""
-                        if s and (MACHINERY.search(s) or leaks(s, self.leak_shingles)):
-                            s = ""
+                        if s and (MACHINERY.search(s) or (len(s.split()) >= 8 and leaks(s, self.leak_shingles))):
+                            self.dbg.append(("stripped", s)); s = ""
                         if s:
                             spoken.append(s)
                             yield ("sentence", s)
@@ -604,8 +651,9 @@ class Conversation:
                 yield ("log", self.unsure_v[0], "partial", min(2, self.unsure_v[2]), "unsure")
             if cover_task:
                 for sid in await cover_task:
-                    yield ("covered", sid)
-            if HW_PROMISE.search(said) and not emitted["todo"] and not opener and not db_has_todo(self.track, self.day):
+                    if self._gate_cover(sid):
+                        yield ("covered", sid)
+            if (HW_PROMISE.search(said) or HW_STATEMENT.search(said)) and not emitted["todo"] and not opener and not db_has_todo(self.track, self.day):
                 t = await make_todo("\n".join(m["content"] for m in self.messages[-6:] if m["role"] == "assistant") + "\n" + said, content_title(self.track, self.day))
                 if t:
                     yield ("todo", t[0], t[1])
@@ -718,7 +766,7 @@ async def factcheck(lesson: str, mentor_text: str) -> str:
 
 
 async def make_todo(recent: str, lesson_title: str):
-    sysmsg = ("The tutor just promised the student a homework item but forgot to create it. From the transcript, write that homework. "
+    sysmsg = ("The tutor just promised the student a homework item but forgot to create it. From the transcript, write that homework. Only refer to materials that actually exist in the lesson; otherwise define the task fully yourself. "
               "Reply ONLY JSON: {\"title\": \"short action title\", \"detail\": \"step by step instructions: exactly what to do, where, how long, how he knows it is done; steps separated by \\\\n\"}.")
     j = _json(await _quick(sysmsg, f"Lesson: {lesson_title}\nTranscript:\n{recent[-2500:]}", 400))
     if j and j.get("title"):

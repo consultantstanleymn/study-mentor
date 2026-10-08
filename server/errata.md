@@ -5,3 +5,4 @@ CORRECTIONS TO THE LESSON PAGES (these override the lesson text where they confl
 - AWS SCPs never apply to the management account, so no SCP can restrict it.
 - LSAT: Logical Reasoning is TWO of the THREE scored sections, about two-thirds of the score (not half). The current test has no Logic Games.
 - AWS: always name all three Control Tower control behaviors (preventive, detective, proactive) when describing controls.
+- AWS SCPs: an SCP constrains the principals (users and roles) of the account it applies to. An assumed role is a principal of the role's own account, so the target account's SCP chain applies to it; the caller's SCPs also apply to the caller's own actions in its own account.

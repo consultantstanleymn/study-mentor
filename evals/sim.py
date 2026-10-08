@@ -103,6 +103,7 @@ async def main():
             out.append(f"**{who}**: {text}")
             if tags: out.append("   `" + " | ".join(tags) + "`")
         left = [x["title"] for x in progress.remaining(track, int(day))]
+        out.append("DEBUG: " + json.dumps([d for d in conv.dbg][:40]))
         out.append(f"\n---\nSECTIONS STILL UNCOVERED: {left}\nOPEN TODOS: {[t['title'] for t in db.open_todos(track)]}\n")
         p = ROOT / "evals" / "out" / f"{label}-{track}{day}-{persona}.md"; p.write_text("\n".join(out)); return p
     for p in await asyncio.gather(*[one(s) for s in specs]): print(p)
