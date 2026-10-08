@@ -216,6 +216,8 @@ GRADE_WORDS = re.compile(r"\b(that'?s|that was|it'?s|a|clean|logged as|graded as
 NAME = re.compile(r",?\s*\bStanley\b(?=[,.!?]|\s)[,.]?", re.I)
 PURE_Q = re.compile(r"^(so )?(what|why|how|can|could|does|do|is|are|should|would|when|where|which|who)\b[^.]{0,120}\?$", re.I)
 COMPREHENSION = re.compile(r"(make sense|does that (land|click|connect|help)|sound (good|right|fair)|got it\?|clear so far|follow(ing)? so far|ok(ay)?\?$)", re.I)
+MISSING_CONTENT = re.compile(r"(don'?t|can'?t|cannot|do not|not able to) (see|find)\b[^.]{0,40}\b(passage|board|stimulus|argument|text|it|anything)|nothing (on|there)|(forgot|forget|didn'?t|did not) (to )?(paste|post|show|put)|blank board|empty board", re.I)
+PASSAGE_REF = re.compile(r"(here'?s|here is|this is|read) (the |a |an )?(next |new |following )?(passage|stimulus|argument|paragraph)\b", re.I)
 ERRATA_TRAPS = [
     (re.compile(r"\b(creates?|provisions?|sets? up|builds?)\b[^.]{0,50}\bthree\b[^.]{0,30}\baccounts\b", re.I),
      "You said Control Tower creates three accounts. Correct: the management account already exists; Control Tower creates the log archive and audit accounts in the Security OU."),
@@ -444,6 +446,8 @@ class Conversation:
         left = progress.remaining(self.track, self.day)
         if self.closing:
             return ""  # he asked to stop: the day completes and uncovered sections carry forward automatically
+        if left and self.consolidating and self.hits >= 2 and self.turns >= 14:
+            return ""  # catch-up sitting: today's new sections carry forward
         if left:
             return ("(System: day_done REFUSED. Not covered yet: " + "; ".join(f"[{x['id']}] {x['title']}" for x in left)
                     + ". Do NOT say goodbye. Teach the next one this very turn.)")
@@ -489,6 +493,8 @@ class Conversation:
         self.cover_flag = False
         self.hit_skills = set()
         self.dbg = []
+        import progress as _pg0
+        self.consolidating = _pg0.backlog(track, day)[1] > 2
         self.item_last_skill = None
         self.fallback_cd = 0
         self.last_cov = 0
@@ -551,6 +557,10 @@ class Conversation:
             if self.warm_targets:
                 t = self.warm_targets[0]; self.warm_idx = 1
                 first_due = f" Your very first question after the greeting is a warm-up retrieval on his earlier skill '{t['topic']}' (rung L{max(2, min(4, t['level'] + 1))}); do not start new material yet."
+            import db as _dbt
+            ot = _dbt.open_todos(self.track)
+            if ot:
+                first_due += f" He still has open homework from day {ot[0]['day']}: '{ot[0]['title']}'. After the warm-up, ask in one sentence how it went and what result he got, and judge it; do not assign new homework until he reports on it."
             user_text = "(Stanley just opened the app and is ready. Begin the session now, following the session shape. " + self._last_session_fact() + first_due + ")"
         elif user_text is not None and not user_text.startswith("("):
             if STOP_SIGNAL.search(user_text):
@@ -585,6 +595,9 @@ class Conversation:
                     verdict = None; self.verdict_note = "(Grader could not settle the answer to the practice item. Ask ONE short probing follow-up; do not rule yet.)"
             elif item_note:
                 self.verdict_note = item_note
+        elif real_answer and MISSING_CONTENT.search(user_text):
+            self.verdict_note = ("(He says he cannot see the passage, board or content you referred to. Do NOT grade or judge anything. Apologise in one short clause, then put the full passage or item on the board with a <board> tag now "
+                                 "and ask the question again in one sentence.)")
         elif real_answer and prev.rstrip().endswith("?") and ASSENT.match(user_text.strip()) and COMPREHENSION.search(prev[-120:]):
             self.verdict_note = ("(He gave a bare yes to a comprehension check, which tells you nothing. Do not move on. Ask ONE concrete prediction or apply-it question about the idea you just taught.)")
         elif real_answer and prev.rstrip().endswith("?") and ASSENT.match(user_text.strip()) and not OFFER.search(prev[-160:]):
@@ -660,6 +673,8 @@ class Conversation:
                         trap = next((fix for rx, fix in ERRATA_TRAPS if rx.search(s)), None)
                         if trap:
                             self.dbg.append(("errata-trap", s)); self.fact_note = trap; s = ""
+                        if s and PASSAGE_REF.search(s) and not emitted["board"] and not item_board and "board" not in s.lower():
+                            self.dbg.append(("passage-ref-stripped", s)); self.fact_note = "You referred to a passage or argument but no <board> came with it, so he saw nothing. Put the full passage on the board with a <board> tag now and ask the question about it."; s = ""
                         if s and BOARD_PROMISE.search(s) and not emitted["board"] and not item_board:
                             rest = re.sub(r"^(?:(?:now )?(?:look at|check|see)(?: it)? (?:on )?the board|the board shows[^,]*)[,:;]?\s*(?:and |then |so )?", "", s, flags=re.I).strip()
                             if "?" in rest and len(rest.split()) >= 4 and not BOARD_PROMISE.search(rest):

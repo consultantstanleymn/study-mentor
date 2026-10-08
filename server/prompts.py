@@ -170,6 +170,8 @@ def coverage_block(track: str, day: int, turns: int = 0) -> str:
             sec = next((x for x in d["sections"] if x["id"] == i["id"]), None) if d else None
             if sec:
                 out.append(f"[d{i['day']}:{i['id']}] {sec['text'][:1200]}")
+        if total > 2:
+            out.append("CONSOLIDATION SITTING: the backlog is large, so this sitting is for catching up. Work the carried items and his due skills first, with one exam-style item each when he is ready. Do not start today's new sections until the backlog is at 2 or fewer; today's sections stay for the next sitting, and you may close once he has shown mastery.")
         out.append("To teach a carried item, use the material of that earlier day, which you may know from the curriculum; keep it brief and emit its covered tag when done.")
     out.append("RULE: emit <day_done/> only when 'Still to teach today' is none. If it is not none, the day is NOT complete; keep teaching the remaining sections, or if he wants to stop, say what carries over to tomorrow.")
     return "\n".join(out)
