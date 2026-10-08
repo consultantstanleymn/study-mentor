@@ -161,9 +161,20 @@ class SentenceSplitter:
         return [sent] if sent else []
 
 
+def _assignment_text(track: str, day: int) -> str:
+    import progress
+    d = prompts.content.load_day(track, day)
+    meta = progress.section_meta(track, day)
+    return "\n\n".join(f"[{x['title']}]\n{x['text']}" for x in (d or {}).get("sections", []) if meta.get(x["id"], {}).get("kind") == "assignment" or x["id"] in ("lab", "drill"))
+
+
 def db_has_todo(track: str, day: int) -> bool:
     import db
     return db.has_todo_for_day(track, day)
+
+
+def answer_expected(user_text) -> bool:
+    return bool(user_text) and not str(user_text).startswith("(")
 
 
 def _shingles(text: str, n: int = 6) -> set:
@@ -209,7 +220,7 @@ ERRATA_TRAPS = [
      "You said Control Tower creates three accounts. Correct: the management account already exists; Control Tower creates the log archive and audit accounts in the Security OU."),
     (re.compile(r"\btwo (enforcement |guardrail |control )?flavou?rs\b", re.I),
      "You said controls come in two flavors. Correct: three behaviors, preventive (SCPs), detective (Config rules) and proactive (CloudFormation Hooks)."),
-    (re.compile(r"caller'?s SCPs? appl(y|ies),? not the target", re.I),
+    (re.compile(r"caller'?s SCPs?[^.]{0,80}(not|rather than)[^.]{0,25}target", re.I),
      "You said the caller's SCPs apply, not the target's. Correct: an SCP constrains the principals of the account it applies to; an assumed role is a principal of the role's account, so the target account's SCPs apply to it."),
     (re.compile(r"\b(30|thirty)[- ]plus (question )?types\b", re.I),
      "Do not state a count of LSAT question types; just name the types you are teaching."),
@@ -245,7 +256,7 @@ class Conversation:
         sk = [x.lower() for x in meta.get("skills", [])]
         if meta.get("kind", "teach") == "teach" and sk:
             need = 1
-            if sum(1 for x in sk if x in self.hit_skills) < need:
+            if sum(1 for x in sk if x in self.hit_skills) < need and self.section_credit.get(sid, 0) < 2:
                 self.dbg.append(("cover-blocked", sid)); return False
         self.cover_flag = True
         return True
@@ -259,18 +270,23 @@ class Conversation:
         if result == "hit":
             self.hits += 1
             self.hit_skills.add(topic.lower())
+            import progress as _p0
+            meta0 = _p0.section_meta(self.track, self.day)
+            cur = next((x["id"] for x in _p0.remaining(self.track, self.day) if meta0.get(x["id"], {}).get("kind", "teach") == "teach"), None)
+            if cur:
+                self.section_credit[cur] = self.section_credit.get(cur, 0) + (2 if level >= 2 else 1)
         self.skill_streak = (topic, (self.skill_streak[1] + 1) if (self.skill_streak[0] == topic and result == "hit") else (1 if result == "hit" else 0))
         self.graded_skills.add(topic.lower())
         if level >= 3:
             self.l3_asked += 1
             yield ("covered", "__l3__")
-        if result == "hit" and level >= 2 or result == "hit" and self.mode != "teach":
+        if result == "hit":
             import progress as _pr
             meta = _pr.section_meta(self.track, self.day)
             done_now = prompts.db.covered_sections(self.track, self.day)
             for sec in _pr.sections_of(self.track, self.day):
                 sk = [x.lower() for x in meta.get(sec["id"], {}).get("skills", [])]
-                if sk and sec["id"] not in done_now and meta[sec["id"]].get("kind") == "teach" and self._gate_cover(sec["id"]):
+                if sec["id"] not in done_now and meta.get(sec["id"], {}).get("kind", "teach") == "teach" and (self.section_credit.get(sec["id"], 0) >= 2 or sk) and self._gate_cover(sec["id"]):
                     yield ("covered", sec["id"])
                     break
 
@@ -307,7 +323,7 @@ class Conversation:
             body = it["stem"].strip() + ("\n\n" + "\n".join(f"- {k}. {v}" for k, v in opts.items()) if opts else "")
             self.item = {"sid": sec["id"], "it": it, "skill": (skills or [sec["title"]])[0]}
             self.hint += ("\n\n(System: a practice item is now on his whiteboard (stimulus and options). Do NOT emit a board and do NOT read or restate the item. "
-                          "In at most 2 sentences tell him to read it on the board and give you his pick with a one-line reason. Reveal nothing.)")
+                          "Your ENTIRE reply: at most one short sentence reacting to his last answer, then the lead-in telling him to read it on the board and give his pick with a one-line reason. Ask no other question. Reveal nothing.)")
             return {"title": "Practice item", "kind": "points", "body": body}
         self.l3_cov_mark = len(covered)
         return None
@@ -347,7 +363,8 @@ class Conversation:
             elif self.graded_total > self.complete_base:
                 self.closing = True
         if self.closing:
-            out += "\n\n(System: he wants to stop. No new questions or material. Give a 2 sentence recap, emit the <todo> homework if none yet, a hook for tomorrow, then <note> and <day_done/>.)"
+            out += ("\n\n(System: he wants to stop. No new questions or material. If you have not yet closed: a 2 sentence recap, emit the <todo> homework if none yet, a hook for tomorrow, then <note> and <day_done/>. "
+                    "If you already closed and he only says okay, thanks or bye, reply with ONE short goodbye sentence and nothing else.)")
             return out
         if self.warm_idx < len(self.warm_targets):
             t = self.warm_targets[self.warm_idx]; self.warm_idx += 1
@@ -435,6 +452,7 @@ class Conversation:
         self.name_turn = -10
         self.leak_shingles = set()
         self.recent = []
+        self.section_credit = {}
         self.cover_flag = False
         self.hit_skills = set()
         self.dbg = []
@@ -602,6 +620,8 @@ class Conversation:
                         trap = next((fix for rx, fix in ERRATA_TRAPS if rx.search(s)), None)
                         if trap:
                             self.dbg.append(("errata-trap", s)); self.fact_note = trap; s = ""
+                        if s and BOARD_PROMISE.search(s) and not emitted["board"] and not item_board:
+                            self.dbg.append(("board-promise-stripped", s)); s = ""
                         if s and re.fullmatch(r"(so )?(does that |do you )?(make sense|follow|get it|see (that|what i mean))( so far)?\??|(sound|does that sound) (good|right|fair)\??|(is that )?(clear|ok(ay)?)( so far)?\??", s.strip(" ."), re.I):
                             s = ""
                         if s and (MACHINERY.search(s) or (len(s.split()) >= 8 and leaks(s, self.leak_shingles))):
@@ -653,6 +673,14 @@ class Conversation:
                 if s:
                     spoken.append(s)
                     yield ("sentence", s)
+            if (truncated or (spoken and not spoken[-1].rstrip().endswith("?"))) and spoken and not opener and not self.closing and not self.item and answer_expected(user_text):
+                q = (await _quick("Write ONE short spoken question (max 22 words) that the tutor would naturally ask next so the student applies the idea just explained. Plain words, no preamble. Output only the question.",
+                                  " ".join(spoken)[-900:], 60)).strip()
+                if q.endswith("?") and len(q.split()) <= 30:
+                    spoken.append(q); yield ("sentence", q)
+            if not spoken:
+                fb = "Good work today, see you next time." if self.closing else "Go ahead, I'm listening. What's your take?"
+                spoken.append(fb); yield ("sentence", fb)
             said = " ".join(spoken)
             if self.unsure_v and not mentor_logged:
                 self.since_graded = 0
@@ -662,7 +690,7 @@ class Conversation:
                     if self._gate_cover(sid):
                         yield ("covered", sid)
             if (HW_PROMISE.search(said) or HW_STATEMENT.search(said)) and not emitted["todo"] and not opener and not db_has_todo(self.track, self.day):
-                t = await make_todo("\n".join(m["content"] for m in self.messages[-6:] if m["role"] == "assistant") + "\n" + said, content_title(self.track, self.day))
+                t = await make_todo("\n".join(m["content"] for m in self.messages[-6:] if m["role"] == "assistant") + "\n" + said, content_title(self.track, self.day), _assignment_text(self.track, self.day))
                 if t:
                     yield ("todo", t[0], t[1])
             if BOARD_PROMISE.search(said) and not emitted["board"]:
@@ -773,10 +801,10 @@ async def factcheck(lesson: str, mentor_text: str) -> str:
     return err
 
 
-async def make_todo(recent: str, lesson_title: str):
+async def make_todo(recent: str, lesson_title: str, source: str = ""):
     sysmsg = ("The tutor just promised the student a homework item but forgot to create it. From the transcript, write that homework. Only refer to materials that actually exist in the lesson; otherwise define the task fully yourself. "
               "Reply ONLY JSON: {\"title\": \"short action title\", \"detail\": \"step by step instructions: exactly what to do, where, how long, how he knows it is done; steps separated by \\\\n\"}.")
-    j = _json(await _quick(sysmsg, f"Lesson: {lesson_title}\nTranscript:\n{recent[-2500:]}", 400))
+    j = _json(await _quick(sysmsg, f"Lesson: {lesson_title}\nTHE LESSON'S OWN ASSIGNMENT TEXT (base the homework on this when it exists):\n{source[:3500] or '(none)'}\nTranscript:\n{recent[-2500:]}", 450))
     if j and j.get("title"):
         return j["title"], str(j.get("detail", "")).replace("\\n", "\n")
     return None

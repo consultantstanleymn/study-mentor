@@ -22,7 +22,10 @@ def _skills_all() -> dict:
 
 def section_meta(track: str, day: int) -> dict:
     """{section_id: {"kind": teach|assignment|practice, "skills": [..]}} from data/skills.json (empty if not generated)."""
-    return _skills_all().get(f"{track}:{day}", {})
+    meta = _skills_all().get(f"{track}:{day}", {})
+    if track == "quant":   # quant weeks are coached task bundles: every section with skills is taught and checked, not just assigned
+        meta = {k: {**v, "kind": "teach" if v.get("skills") else v.get("kind", "teach")} for k, v in meta.items()}
+    return meta
 
 
 def skills_for_day(track: str, day: int) -> list[str]:
