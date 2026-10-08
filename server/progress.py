@@ -67,3 +67,18 @@ def backlog(track: str, day: int, limit: int = 8) -> tuple[list[dict], int]:
         for s in remaining(track, d):
             items.append({"day": d, "id": s["id"], "title": s["title"], "skipped": status != "done" and d not in touched})
     return items[:limit], len(items)
+
+
+ITEMS_PATH = Path(__file__).resolve().parent.parent / "data" / "items.json"
+
+
+@lru_cache(maxsize=1)
+def _items_all() -> dict:
+    try:
+        return json.loads(ITEMS_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def item_for(track: str, day: int, section_id: str) -> dict | None:
+    return _items_all().get(f"{track}:{day}:{section_id}")

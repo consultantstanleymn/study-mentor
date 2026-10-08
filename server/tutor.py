@@ -147,8 +147,9 @@ MACHINERY = re.compile(r"\b(mark(ing|ed)?|log(ging|ged)?|record(ing|ed)?|sav(e|i
 HW_PROMISE = re.compile(r"\b(I'?ll|I will|I'?ve|I have|let me|I'?m going to|going to)\b[^.?!]{0,40}\b(add|put|added|assign|assigned|give|save|drop)\b[^.?!]{0,50}\b(list|to-?do|homework|assignment)", re.I)
 BOARD_PROMISE = re.compile(r"(look at the board|(see|on|check|at) the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
 
+STOP_SIGNAL = re.compile(r"\b(that'?s (all|it|enough)|i('?m| am) (done|tired|out)|let'?s (stop|wrap|call it)|wrap (it )?up|end (the )?(session|class)|(today|day) (is|has been) (done|complete|over)|i have to go|gotta go|mark (today|it|this) (as )?(complete|done))\b", re.I)
 ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
-MAX_SENTENCES = 8
+MAX_SENTENCES = 6
 
 
 class Conversation:
@@ -156,11 +157,30 @@ class Conversation:
         """Server-driven nudges so exam-tier items and real application questions actually happen."""
         import db
         out = ""
+        if self.closing:
+            out += "\n\n(System: he wants to stop. No new questions or material. Give a 2 sentence recap, emit the <todo> homework if none yet, a hook for tomorrow, then <note> and <day_done/>.)"
+            return out
+        if self.warm_idx < len(self.warm_targets):
+            t = self.warm_targets[self.warm_idx]; self.warm_idx += 1
+            return out + (f"\n\n(System: WARM-UP. Before any new material, ask ONE quick retrieval question on his earlier skill '{t['topic']}' at rung L{min(4, t['level'] + 1)}"
+                          f"{' (he missed it last time, so keep it gentle)' if t['last_result'] == 'miss' else ''}. Do not teach new material this turn.)")
         cov = len([x for x in db.covered_sections(self.track, self.day) if x != "__l3__"])
         if self.mode in ("teach", "review") and (cov - self.l3_cov_mark >= 2 or (self.turns >= 10 and self.l3_asked == 0)):
+            import progress
             bank = prompts.content.load_day(self.track, self.day)
             qs = (bank or {}).get("questions") or []
-            if qs and self.bank_idx < len(qs):
+            stored = None
+            for sec in reversed(progress.sections_of(self.track, self.day)):
+                it = progress.item_for(self.track, self.day, sec["id"])
+                if it and sec["id"] in db.covered_sections(self.track, self.day) and sec["id"] not in self.used_items:
+                    stored = (sec["id"], it); break
+            if stored:
+                sid, it = stored; self.used_items.add(sid)
+                opts = " | ".join(f"{k}. {v}" for k, v in (it.get("options") or {}).items())
+                out += ("\n\n(System: it is time for ONE exam-tier (L3) item. Use THIS pre-written item. Speak only the stem, in your own words, and say the options are on the board; "
+                        "emit the options with <board title=\"Options\" kind=\"points\">- A. ...\\n- B. ...</board>. Do not reveal the answer or traps until he commits; then give the verdict and probe 'why not <a tempting option>?' using the traps.\n"
+                        f"STEM: {it['stem']}\nOPTIONS: {opts or '(open answer)'}\nANSWER: {it['answer']}\nWHY: {it.get('why','')}\nTRAPS: {json.dumps(it.get('traps', {}))})")
+            elif qs and self.bank_idx < len(qs):
                 out += (f"\n\n(System: it is time for ONE exam-tier (L3) item. Use Q{self.bank_idx + 1} from today's question bank: paraphrase the stem, read options A to D briefly, "
                         "and do not explain until he commits to an answer. Log it with level=\"3\".)")
                 self.bank_idx += 1
@@ -176,6 +196,8 @@ class Conversation:
         """'' if day_done may be accepted, else a system hint explaining why not."""
         import progress
         left = progress.remaining(self.track, self.day)
+        if self.closing:
+            return ""  # he asked to stop: the day completes and uncovered sections carry forward automatically
         if left:
             return ("(System: day_done REFUSED. Not covered yet: " + "; ".join(f"[{x['id']}] {x['title']}" for x in left)
                     + ". Do NOT say goodbye. Teach the next one this very turn.)")
@@ -211,6 +233,12 @@ class Conversation:
         self.fact_task = None
         self.promised_board = False
         self.used_note = False
+        self.verdict_note = ""
+        self.used_items = set()
+        self.closing = False
+        self.warm_idx = 0
+        import db
+        self.warm_targets = db.due_topics(track, 2) if mode in ("teach", "review") else []
         self.l3_cov_mark = 0     # covered-section count at the last exam-tier item
         self.l3_asked = 0
         self.since_graded = 0
@@ -230,6 +258,8 @@ class Conversation:
             self.used_note = bool(self.fact_note)
             if self.fact_note:
                 hint += "\n\n(System: your previous turn contained an error: " + self.fact_note + " Correct it briefly and naturally at the start of this reply, then continue.)"; self.fact_note = ""
+            if self.verdict_note:
+                hint += "\n\n" + self.verdict_note; self.verdict_note = ""
             if self.hint:
                 hint += "\n\n" + self.hint; self.hint = ""
             hint += self._pressure_hint()
@@ -250,8 +280,14 @@ class Conversation:
         | ('day_done',) | ('note', str) | ('error', str). Whatever was emitted counts as said (kept in history),
         even if the caller stops early (barge-in)."""
         if opener:
-            user_text = "(Stanley just opened the app and is ready. Begin the session now, following the session shape. " + self._last_session_fact() + ")"
+            first_due = ""
+            if self.warm_targets:
+                t = self.warm_targets[0]; self.warm_idx = 1
+                first_due = f" Your very first question after the greeting is a warm-up retrieval on his earlier skill '{t['topic']}' (rung L{min(4, t['level'] + 1)}); do not start new material yet."
+            user_text = "(Stanley just opened the app and is ready. Begin the session now, following the session shape. " + self._last_session_fact() + first_due + ")"
         elif user_text is not None and not user_text.startswith("("):
+            if STOP_SIGNAL.search(user_text):
+                self.closing = True
             self.assent_run = self.assent_run + 1 if ASSENT.match(user_text.strip()) else 0
             if self.assent_run >= 2:
                 self.hint = ("(System: his last " + str(self.assent_run) + " replies were only okay/sure/yes, which does not tell you whether it landed. "
@@ -260,13 +296,19 @@ class Conversation:
         spoken: list[str] = []
         truncated = False
         import progress
-        grade_task = cover_task = None
+        cover_task = None
         prev = next((m["content"] for m in reversed(self.messages) if m["role"] == "assistant"), "")
+        verdict = None
         if (user_text and not opener and not user_text.startswith("(") and prev.rstrip().endswith("?")
                 and not ASSENT.match(user_text.strip()) and not user_text.strip().endswith("?") and not OFFER.search(prev[-160:])):
-            import db
-            known = [m["topic"] for m in db.mastery_map(self.track, 60)]
-            grade_task = asyncio.create_task(grade_answer(prev, user_text, content_title(self.track, self.day), known))
+            import db, progress as _pg
+            known = _pg.skills_for_day(self.track, self.day) + [m["topic"] for m in db.mastery_map(self.track, 40)]
+            verdict = await grade_answer(prev, user_text, content_title(self.track, self.day), known)
+            if verdict:
+                self.verdict_note = (f"(Grader verdict, already decided, you must not contradict it: {verdict[1].upper()} on '{verdict[0]}'. "
+                                     + (f"Flaw: {verdict[3]} " if verdict[1] == "miss" and verdict[3] else "")
+                                     + "Speak this verdict in your first two sentences, quoting or referring to what he actually said. "
+                                       "A correction must refer to his real words; never invent an error he did not make. Do NOT emit a <log> tag.)")
         self.turns += 1
         if not opener and self.turns % 3 == 0 and self.turns >= 3:
             left = progress.remaining(self.track, self.day)
@@ -275,7 +317,6 @@ class Conversation:
                 cover_task = asyncio.create_task(judge_sections(left, recent))
         logged = False
         emitted = {"todo": False, "board": False}
-        pending_l3: list = []
         if not opener and user_text and not user_text.startswith("("):
             self.since_graded += 1
         headers = {"Authorization": f"Bearer {api_key()}", "Content-Type": "application/json"}
@@ -283,14 +324,8 @@ class Conversation:
         def handle(events):
             for ev in events:
                 if ev[0] == "log":
-                    nonlocal logged
-                    logged = True
-                    if ev[2] == "hit":
-                        self.hits += 1
-                    self.since_graded = 0
-                    if len(ev) > 3 and ev[3] and ev[3] >= 3:
-                        self.l3_asked += 1; pending_l3.append(1)
-                elif ev[0] in ("todo", "board"):
+                    continue  # the independent grader is the single source of truth for logs
+                if ev[0] in ("todo", "board"):
                     emitted[ev[0]] = True
                 if ev[0] == "speech":
                     yield ("speech", ev[1])
@@ -303,6 +338,14 @@ class Conversation:
                     yield ev
 
         try:
+            if verdict:
+                self.since_graded = 0
+                if verdict[1] == "hit":
+                    self.hits += 1
+                if verdict[2] >= 3:
+                    self.l3_asked += 1
+                    yield ("covered", "__l3__")
+                yield ("log", verdict[0], verdict[1], verdict[2])
             async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=60.0)) as client:
                 async with client.stream("POST", API_URL, headers=headers, json=self._payload(user_text)) as r:
                     if r.status_code != 200:
@@ -326,7 +369,7 @@ class Conversation:
                             for ev in handle(parser.feed(delta)):
                                 yield ev
                         cap = 5 if opener else MAX_SENTENCES
-                        if len(spoken) >= cap and (spoken[-1].endswith("?") or len(spoken) >= cap + 3):
+                        if len(spoken) >= cap and (spoken[-1].endswith("?") or len(spoken) >= cap + 1):
                             truncated = not spoken[-1].endswith("?")
                             break
             for ev in handle(parser.flush()):
@@ -337,19 +380,6 @@ class Conversation:
                     spoken.append(s)
                     yield ("sentence", s)
             said = " ".join(spoken)
-            if pending_l3:
-                yield ("covered", "__l3__")
-            if grade_task:
-                g = await grade_task
-                if g and not logged:
-                    self.since_graded = 0
-                    if g[1] == "hit":
-                        self.hits += 1
-                    if g[2] >= 3:
-                        self.l3_asked += 1; yield ("covered", "__l3__")
-                    elif spoken and PRAISE.search(spoken[0]):
-                        self.fact_note = self.fact_note or "You praised an answer that was actually flawed or incomplete. Name the exact flaw now, kindly, before moving on."
-                    yield ("log", g[0], g[1], g[2])
             if cover_task:
                 for sid in await cover_task:
                     yield ("covered", sid)
@@ -419,7 +449,7 @@ async def grade_answer(question: str, answer: str, lesson_title: str, topics: li
     """Strict independent grade of the student's reply to the mentor's last question. Returns (topic, result, level) or None."""
     known = "; ".join(topics[:40]) or "(none yet)"
     sysmsg = ("You grade a beginner's spoken answer (speech-to-text, so ignore small word errors) to a tutor's question. "
-              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"...\", \"result\": \"hit\"|\"miss\", \"level\": 1-4}. "
+              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"...\", \"result\": \"hit\"|\"miss\", \"level\": 1-4, \"flaw\": \"if miss: the exact words from the student's answer that were wrong or missing, quoted, plus the correct fact in one sentence; else empty\"}. "
               "gradable=false if the tutor's turn was an offer or check-in rather than a question needing knowledge or reasoning, if the student asked a question back, "
               "or if the reply is just okay/sure/I don't know. "
               "topic: choose EXACTLY one name from the known topics if it fits, otherwise a new 2-4 word name. "
@@ -433,7 +463,7 @@ async def grade_answer(question: str, answer: str, lesson_title: str, topics: li
             if k.lower() == topic.lower():
                 topic = k
         lvl = cap_level(question, j.get("level") if isinstance(j.get("level"), int) else 0)
-        return topic, j["result"], lvl
+        return topic, j["result"], lvl, str(j.get("flaw") or "")[:300]
     return None
 
 
