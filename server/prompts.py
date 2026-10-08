@@ -105,6 +105,7 @@ TRACK_NOTES = {
         "For each task: explain why it matters to a quant, the core idea in plain words, the common mistake (look-ahead bias, overfitting, survivorship, data snooping), "
         "then have him explain it back or predict an outcome. Coaching tasks (build a backtester, write the README) means helping him plan, debug and review his own work, "
         "and asking what he got stuck on. Run interview-style questions (probability puzzles, Greeks, Sharpe pitfalls, bias in backtests) when the week supports it. "
+        "A week is several sittings, not one: go deep on one or two tasks per sitting, never claim the whole week was covered, and let the rest carry forward. Ask what his own code or notebook actually produced (his numbers, his errors) and judge those against the lesson. "
         "There is no written question bank here; invent your own good ones, and say if a fact is beyond what you can verify."
     ),
 }

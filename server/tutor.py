@@ -221,8 +221,6 @@ ERRATA_TRAPS = [
      "You said Control Tower creates three accounts. Correct: the management account already exists; Control Tower creates the log archive and audit accounts in the Security OU."),
     (re.compile(r"\btwo (enforcement |guardrail |control )?flavou?rs\b", re.I),
      "You said controls come in two flavors. Correct: three behaviors, preventive (SCPs), detective (Config rules) and proactive (CloudFormation Hooks)."),
-    (re.compile(r"caller'?s SCPs?[^.]{0,80}(not|rather than)[^.]{0,25}target", re.I),
-     "You said the caller's SCPs apply, not the target's. Correct: an SCP constrains the principals of the account it applies to; an assumed role is a principal of the role's account, so the target account's SCPs apply to it."),
     (re.compile(r"\b(30|thirty)[- ]plus (question )?types\b", re.I),
      "Do not state a count of LSAT question types; just name the types you are teaching."),
 ]
@@ -299,6 +297,29 @@ class Conversation:
                     yield ("covered", sec["id"])
                     break
 
+    def _warm_item(self):
+        """Review of a due skill he already applies (L2+): serve a stored exam-style item for that skill instead of a spoken recall question."""
+        import progress
+        if self.warm_idx >= len(self.warm_targets):
+            return None
+        t = self.warm_targets[self.warm_idx]
+        if t["level"] < 2:
+            return None
+        want = t["topic"].lower().strip()
+        for key, it in progress._items_all().items():
+            if key in progress._items_bad() or (it.get("skill") or "").lower().strip() != want or key in self.used_items:
+                continue
+            opts = it.get("options") or {}
+            if len(opts) < 4:
+                continue
+            self.used_items.add(key); self.warm_idx += 1; self.l3_asked += 1
+            self.item = {"sid": key, "it": it, "skill": t["topic"]}
+            self.hint += ("\n\n(System: review time. A practice item on his earlier skill is now on his whiteboard. Do NOT emit a board and do NOT read or restate the item. "
+                          "Your ENTIRE reply: at most one short sentence reacting to his last answer, then tell him it is a quick review of something from before, to read it on the board and give his pick with a one-line reason. Ask no other question. Reveal nothing.)")
+            body = it["stem"].strip() + "\n\n" + "\n".join(f"- {k}. {v}" for k, v in opts.items())
+            return {"title": "Review item", "kind": "points", "body": body}
+        return None
+
     def _l3_due(self) -> bool:
         import db
         if self.mode not in ("teach", "review") or self.closing or self.warm_idx < len(self.warm_targets):
@@ -371,6 +392,9 @@ class Conversation:
                 self.complete_base = self.graded_total
             elif self.graded_total > self.complete_base:
                 self.closing = True
+        if self.track == "quant" and not self.closing and self.turns >= 24 and self.hits >= 2 and self.since_graded < 3:
+            self.closing = True  # a quant week is several sittings: close this one, the rest carries forward
+            out += "\n\n(System: this sitting is long enough. Before the recap, ask ONE code check-in tied to this week's notebook work: have him say what his function or number came out as (for example his max drawdown or his SPY kurtosis) and judge it. Then close.)"
         if self.closing:
             out += ("\n\n(System: he wants to stop. No new questions or material. If you have not yet closed: a 2 sentence recap, emit the <todo> homework if none yet, a hook for tomorrow, then <note> and <day_done/>. "
                     "If you already closed and he only says okay, thanks or bye, reply with ONE short goodbye sentence and nothing else.)")
@@ -583,6 +607,8 @@ class Conversation:
             for rx, fix in STUDENT_TRAPS:
                 if rx.search(user_text):
                     self.verdict_note = (self.verdict_note + " " if self.verdict_note else "") + "(Fact check on his words: " + fix + ")"
+        if real_answer and not self.item and not self.closing and self.mode in ("teach", "review"):
+            item_board = self._warm_item()
         if real_answer and not self.item and self._l3_due():
             item_board = self._start_item()
         self.turns += 1
@@ -635,7 +661,11 @@ class Conversation:
                         if trap:
                             self.dbg.append(("errata-trap", s)); self.fact_note = trap; s = ""
                         if s and BOARD_PROMISE.search(s) and not emitted["board"] and not item_board:
-                            self.dbg.append(("board-promise-stripped", s)); s = ""
+                            rest = re.sub(r"^(?:(?:now )?(?:look at|check|see)(?: it)? (?:on )?the board|the board shows[^,]*)[,:;]?\s*(?:and |then |so )?", "", s, flags=re.I).strip()
+                            if "?" in rest and len(rest.split()) >= 4 and not BOARD_PROMISE.search(rest):
+                                s = rest[0].upper() + rest[1:]; self.dbg.append(("board-promise-rewritten", s))
+                            else:
+                                self.dbg.append(("board-promise-stripped", s)); s = ""
                         if s and re.fullmatch(r"(so )?(does that |do you )?(make sense|follow|get it|see (that|what i mean))( so far)?\??|(sound|does that sound) (good|right|fair)\??|(is that )?(clear|ok(ay)?)( so far)?\??", s.strip(" ."), re.I):
                             s = ""
                         if s and (MACHINERY.search(s) or (len(s.split()) >= 8 and leaks(s, self.leak_shingles))):
@@ -658,7 +688,8 @@ class Conversation:
                 async with client.stream("POST", API_URL, headers=headers, json=self._payload(user_text)) as r:
                     if r.status_code != 200:
                         body = (await r.aread()).decode("utf-8", "ignore")[:300]
-                        yield ("error", f"Model error {r.status_code}: {body}")
+                        why = {401: "the API key was rejected", 402: "the DeepSeek balance is empty", 429: "the model is rate limiting"}.get(r.status_code, f"error {r.status_code}")
+                        yield ("error", f"I can't reach the model ({why}). Your progress is safe; nothing from this attempt was saved. {body[:120]}")
                         return
                     async for line in r.aiter_lines():
                         if not line.startswith("data:"):
@@ -696,6 +727,8 @@ class Conversation:
                     if lastw and q.split()[0].strip(",.?").lower() == lastw[0].lower():
                         q = " ".join(q.split()[1:]).capitalize() if len(q.split()) > 3 else q
                     spoken.append(q); yield ("sentence", q)
+                else:
+                    self.dbg.append(("trailing-q-rejected", q))
             if not spoken:
                 fb = "Good work today, see you next time." if self.closing else "Go ahead, I'm listening. What's your take?"
                 spoken.append(fb); yield ("sentence", fb)

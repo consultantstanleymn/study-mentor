@@ -1,12 +1,13 @@
 """Multi-day chain sim: runs days N..N+K-1 in one throwaway DB with a simulated one-day clock advance between sessions.
 Usage: sim_multi.py label track day persona [days=5]. Writes a transcript plus a metrics summary (levels, due, backlog, retention hits)."""
-import asyncio, json, os, random, sys, time
+import httpx, asyncio, json, os, random, sys, time
 import sim
 from sim import db, tutor, progress, ROOT
 
 async def run_day(track, d, persona, turns, key, label):
     # like sim.run but without re-marking earlier days done: the chain's own history stands
     conv = tutor.Conversation(track, d, "teach")
+    db.start_session(track, d, "teach")
     P = sim.PERSONAS[persona]; rng = random.Random(label + str(d)); lines, hist, events = [], [], []
     text, tags = await sim.mentor_turn(conv, None, opener=True); lines.append(("MENTOR", text, tags)); hist.append(("m", text))
     for i in range(turns):
@@ -17,12 +18,16 @@ async def run_day(track, d, persona, turns, key, label):
         lines.append((f"STUDENT[{beh}]", reply, [])); hist.append(("s", reply))
         text, tags = await sim.mentor_turn(conv, reply); lines.append(("MENTOR", text, tags)); hist.append(("m", text))
         if any(t.startswith("day_done:OK") for t in tags): break
+        if sum(1 for _, _, tg in lines for t in tg if t.startswith("ERROR:")) > 2: break
     return conv, lines
 
 async def main():
     label, track, day, persona = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
     days = int(sys.argv[5]) if len(sys.argv) > 5 else 5
+    db.set_kv("coverage_epoch", str(time.time() - 1))
     for d in range(1, day): db.mark_day(track, d, "done")
+    bal = httpx.get("https://api.deepseek.com/user/balance", headers={"Authorization": "Bearer " + tutor.api_key()}).json()
+    if not bal.get("is_available"): sys.exit("DeepSeek balance empty: top up before running chains")
     key = tutor.api_key(); turns = int(os.environ.get("SIM_TURNS", "24"))
     out, summary = [f"# {label} chain {track} days {day}-{day+days-1} persona={persona}\n"], []
     for d in range(day, day + days):
@@ -38,6 +43,8 @@ async def main():
                         warm_n += 1; warm_hits += 1 if "=hit" in t else 0
         note = await tutor.debrief(track, d, conv.messages)
         if note: db.add_note(track, d, note)
+        nerr = sum(1 for _, _, tg in lines for t in tg if t.startswith("ERROR:"))
+        if nerr > 2: out.append(f"\nMODEL ERRORS {nerr}: day invalid, not marked"); summary.append(f"day {d}: INVALID ({nerr} model errors)"); continue
         if not any(t.startswith("day_done:OK") for _, _, tg in lines for t in tg): db.mark_day(track, d, "done")  # student presses Mark complete
         mm = db.mastery_map(track, 500)
         bl = progress.backlog(track, d + 1)

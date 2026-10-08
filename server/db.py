@@ -169,6 +169,16 @@ def start_session(track: str, day: int, mode: str) -> int:
         return cur.lastrowid
 
 
+def session_days_since_epoch(track: str) -> set[int]:
+    """Days that had a real session after coverage tracking began (so a 'done' day without coverage is hollow, not legacy)."""
+    ep = get_kv("coverage_epoch")
+    if ep is None:
+        set_kv("coverage_epoch", str(time.time()))
+        return set()
+    with conn() as c:
+        return {r["day"] for r in c.execute("SELECT DISTINCT day FROM sessions WHERE track=? AND started>?", (track, float(ep)))}
+
+
 def end_session(sid: int):
     with conn() as c:
         c.execute("UPDATE sessions SET ended=? WHERE id=?", (time.time(), sid))

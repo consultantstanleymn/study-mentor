@@ -63,9 +63,10 @@ def backlog(track: str, day: int, limit: int = 8) -> tuple[list[dict], int]:
     records are legacy and assumed fully covered. Returns (first `limit` items oldest first, total count)."""
     items = []
     touched = db.days_with_coverage(track)
+    hollow = db.session_days_since_epoch(track)
     for d in range(1, day):
         status = db.day_status(track, d)
-        if status == "done" and d not in touched:
+        if status == "done" and d not in touched and d not in hollow:
             continue
         for s in remaining(track, d):
             items.append({"day": d, "id": s["id"], "title": s["title"], "skipped": status != "done" and d not in touched})
