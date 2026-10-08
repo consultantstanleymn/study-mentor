@@ -211,7 +211,7 @@ async def ws(sock: WebSocket):
                 elif kind == "focus":
                     await send({"type": "focus", "turn": my_turn, "nodes": ev[1]})
                 elif kind == "log":
-                    db.log_topic(conv.track, ev[1], ev[2])
+                    db.log_topic(conv.track, ev[1], ev[2], ev[3] if len(ev) > 3 else 0)
                     await send({"type": "log", "turn": my_turn, "topic": ev[1], "result": ev[2]})
                 elif kind == "todo":
                     if db.add_todo(conv.track, conv.day, ev[1], ev[2]):
@@ -224,12 +224,10 @@ async def ws(sock: WebSocket):
                     except ValueError:
                         db.mark_covered(conv.track, conv.day, sec)
                 elif kind == "day_done":
-                    left = progress.remaining(conv.track, conv.day)
-                    if left:
-                        conv.hint = ("(System: day_done was REFUSED. These sections are not covered yet: "
-                                     + "; ".join(f"[{x['id']}] {x['title']}" for x in left)
-                                     + ". Tell him honestly, and teach the next one now.)")
-                        await send({"type": "day_blocked", "turn": my_turn, "left": [x["title"] for x in left]})
+                    refusal = conv.day_done_refusal()
+                    if refusal:
+                        conv.hint = refusal
+                        await send({"type": "day_blocked", "turn": my_turn, "left": [x["title"] for x in progress.remaining(conv.track, conv.day)]})
                     else:
                         db.set_kv(_convo_key(conv.track, conv.day), "")
                         db.mark_day(conv.track, conv.day, "done")

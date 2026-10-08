@@ -66,7 +66,7 @@ class TagParser:
                 self.buf = self.buf[end + 2:]
                 attrs = dict(re.findall(r'(\w+)="([^"]*)"', tag))
                 if name == "log":
-                    yield ("log", attrs.get("topic", ""), attrs.get("result", "hit"))
+                    yield ("log", attrs.get("topic", ""), attrs.get("result", "hit"), int(attrs.get("level", "0") or 0) if str(attrs.get("level", "0")).isdigit() else 0)
                 elif name == "focus":
                     yield ("focus", attrs.get("nodes", ""))
                 elif name == "layout":
@@ -141,19 +141,42 @@ def content_title(track: str, day: int) -> str:
     return d["title"] if d else ""
 
 
+OFFER = re.compile(r"(want (me )?to|want an|ready\?|shall we|should (we|i)|make sense|sound (good|doable|fair)|does that (connect|land|help)|any questions|better\?|clear\?)", re.I)
+PRAISE = re.compile(r"^(exactly|perfect|precisely|that'?s (exactly )?right|correct|yes[,.!]|great|spot on|right[,.!])", re.I)
+MACHINERY = re.compile(r"\b(mark(ing|ed)?|log(ging|ged)?|record(ing|ed)?|sav(e|ing|ed))\b[^.?!]{0,40}\b(cover(ed)?|section|that|this|answer|correct(ly)?|progress|miss|hit)\b|\bI('ve| have) covered\b|\bsection[^.?!]{0,30}\bcovered\b", re.I)
+HW_PROMISE = re.compile(r"\b(I'?ll|I will|I'?ve|I have|let me|I'?m going to|going to)\b[^.?!]{0,40}\b(add|put|added|assign|assigned|give|save|drop)\b[^.?!]{0,50}\b(list|to-?do|homework|assignment)", re.I)
+BOARD_PROMISE = re.compile(r"(look at the board|on the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
+
 ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
 MAX_SENTENCES = 8
 
 
 class Conversation:
+    def day_done_refusal(self) -> str:
+        """'' if day_done may be accepted, else a system hint explaining why not."""
+        import progress
+        left = progress.remaining(self.track, self.day)
+        if left:
+            return ("(System: day_done REFUSED. Not covered yet: " + "; ".join(f"[{x['id']}] {x['title']}" for x in left)
+                    + ". Do NOT say goodbye. Teach the next one this very turn.)")
+        if self.hits < 2:
+            return ("(System: day_done REFUSED. He has not yet shown mastery today: fewer than 2 correct answers. Run a short exit ticket of 2 application questions "
+                    "(one exam-style), then you may close the day.)")
+        return ""
+
     def _last_session_fact(self) -> str:
         import db
         notes = db.recent_notes(self.track, 1)
         with db.conn() as c:
             n = c.execute("SELECT COUNT(*) AS n FROM sessions WHERE track=?", (self.track,)).fetchone()["n"]
         if n <= 1 and not notes:
-            return "This is his very first session in this track."
-        return "This is NOT the first session. " + (f"Last session debrief: {notes[-1]['note'][:300]}" if notes else "")
+            import content
+            meta = content.TRACKS[self.track]
+            return f"Track: {meta['name']}, {meta['unit'].lower()} {self.day} of {meta['days']}. This is his very first session in this track."
+        import content
+        meta = content.TRACKS[self.track]
+        return (f"Track: {meta['name']}, {meta['unit'].lower()} {self.day} of {meta['days']}. This is NOT the first session in this track, never say it is the first or 'day one'. "
+                + (f"Last session debrief: {notes[-1]['note'][:300]}" if notes else ""))
 
     def __init__(self, track: str, day: int, mode: str):
         self.track, self.day, self.mode = track, day, mode
@@ -162,16 +185,28 @@ class Conversation:
         self.hint = ""  # one-shot system note for the next turn (e.g. a refused day_done)
         self.assent_run = 0
         self.turns = 0
+        self.hits = 0          # graded hits this session (gate for day_done)
+        self.fact_note = ""    # correction produced by the background fact-check of the previous mentor turn
+        self.fact_task = None
+        self.promised_board = False
 
     def _payload(self, user_text: str | None):
-        sysmsg = self.system + "\n\n" + prompts.coverage_block(self.track, self.day) + "\n\n" + prompts.FINAL_REMINDERS
+        sysmsg = self.system + "\n\n" + prompts.mastery_block(self.track) + "\n\n" + prompts.coverage_block(self.track, self.day, self.turns) + "\n\n" + prompts.FINAL_REMINDERS
         msgs = [{"role": "system", "content": sysmsg}] + self.messages[-MAX_HISTORY:]
         if user_text is not None:
             hint = ""
+            if self.fact_task is not None and self.fact_task.done():
+                try:
+                    self.fact_note = self.fact_task.result() or ""
+                except Exception:  # noqa: BLE001
+                    self.fact_note = ""
+                self.fact_task = None
+            if self.fact_note:
+                hint += "\n\n(System: your previous turn contained an error: " + self.fact_note + " Correct it briefly and naturally at the start of this reply, then continue.)"; self.fact_note = ""
             if self.hint:
                 hint += "\n\n" + self.hint; self.hint = ""
             if re.search(r"\b(draw|diagram|whiteboard|board|sketch|visuali[sz]e|illustrate|mermaid|picture)\b", user_text, re.I):
-                hint = "\n\n(System note: he asked to see it. Emit a NEW <board> tag in this reply, with <layout board=\"wide\"/> first, then walk through it with <focus/> tags.)"
+                hint += "\n\n(System note: he asked to see it. Emit a NEW <board> tag in this reply, with <layout board=\"wide\"/> first, then walk through it with <focus/> tags.)"
             msgs.append({"role": "user", "content": user_text + hint})
         return {
             "model": MODEL,
@@ -191,23 +226,27 @@ class Conversation:
         elif user_text is not None and not user_text.startswith("("):
             self.assent_run = self.assent_run + 1 if ASSENT.match(user_text.strip()) else 0
             if self.assent_run >= 2:
-                self.hint = ("(System: he has now said only okay/sure/yes " + str(self.assent_run) + " times in a row. That is NOT evidence of understanding. "
-                             "Do not advance. Warmly ask him to say the idea back in his own words or predict a tiny case, and make it easy to answer.)")
+                self.hint = ("(System: his last " + str(self.assent_run) + " replies were only okay/sure/yes, which does not tell you whether it landed. "
+                             "Do not advance. In a warm, light way, e.g. 'Let me make sure I explained that well, how would you put it in your own words?', ask him to say it back or predict one tiny case.)")
         parser, splitter = TagParser(), SentenceSplitter()
         spoken: list[str] = []
         truncated = False
         import progress
         grade_task = cover_task = None
         prev = next((m["content"] for m in reversed(self.messages) if m["role"] == "assistant"), "")
-        if user_text and not opener and not user_text.startswith("(") and prev.rstrip().endswith("?") and not ASSENT.match(user_text.strip()):
-            grade_task = asyncio.create_task(grade_answer(prev, user_text, content_title(self.track, self.day)))
+        if (user_text and not opener and not user_text.startswith("(") and prev.rstrip().endswith("?")
+                and not ASSENT.match(user_text.strip()) and not user_text.strip().endswith("?") and not OFFER.search(prev[-160:])):
+            import db
+            known = [m["topic"] for m in db.mastery_map(self.track, 60)]
+            grade_task = asyncio.create_task(grade_answer(prev, user_text, content_title(self.track, self.day), known))
         self.turns += 1
-        if not opener and self.turns % 3 == 0:
+        if not opener and self.turns % 3 == 0 and self.turns >= 3:
             left = progress.remaining(self.track, self.day)
             if left:
-                recent = "\n".join(m["content"] for m in self.messages[-12:] if m["role"] == "assistant")
+                recent = "\n".join(("TUTOR: " if m["role"] == "assistant" else "STUDENT: ") + m["content"] for m in self.messages[-14:])
                 cover_task = asyncio.create_task(judge_sections(left, recent))
         logged = False
+        emitted = {"todo": False, "board": False}
         headers = {"Authorization": f"Bearer {api_key()}", "Content-Type": "application/json"}
 
         def handle(events):
@@ -215,11 +254,15 @@ class Conversation:
                 if ev[0] == "log":
                     nonlocal logged
                     logged = True
+                    if ev[2] == "hit":
+                        self.hits += 1
+                elif ev[0] in ("todo", "board"):
+                    emitted[ev[0]] = True
                 if ev[0] == "speech":
                     yield ("speech", ev[1])
                     for s in splitter.feed(ev[1]):
                         s = re.sub(r"[*_`#]+", "", s).replace("\u2014", ", ").replace("\u2013", ", ").strip()
-                        if s:
+                        if s and not MACHINERY.search(s):
                             spoken.append(s)
                             yield ("sentence", s)
                 else:
@@ -258,13 +301,26 @@ class Conversation:
                 if s:
                     spoken.append(s)
                     yield ("sentence", s)
+            said = " ".join(spoken)
             if grade_task:
                 g = await grade_task
                 if g and not logged:
-                    yield ("log", g[0], g[1])
+                    if g[1] == "hit":
+                        self.hits += 1
+                    elif spoken and PRAISE.search(spoken[0]):
+                        self.fact_note = self.fact_note or "You praised an answer that was actually flawed or incomplete. Name the exact flaw now, kindly, before moving on."
+                    yield ("log", g[0], g[1], g[2])
             if cover_task:
                 for sid in await cover_task:
                     yield ("covered", sid)
+            if HW_PROMISE.search(said) and not emitted["todo"] and not opener:
+                t = await make_todo("\n".join(m["content"] for m in self.messages[-6:] if m["role"] == "assistant") + "\n" + said, content_title(self.track, self.day))
+                if t:
+                    yield ("todo", t[0], t[1])
+            if BOARD_PROMISE.search(said) and not emitted["board"]:
+                self.fact_note = (self.fact_note + " " if self.fact_note else "") + "You said you would show or draw something on the board but emitted no <board> tag. Emit the board now with the next sentence."
+            if said and not opener and self.fact_task is None:
+                self.fact_task = asyncio.create_task(factcheck(prompts.content.lesson_text(self.track, self.day), said))
         except httpx.HTTPError as e:
             yield ("error", f"Network problem talking to the model: {e}")
         finally:
@@ -307,16 +363,44 @@ def _json(text: str):
         return None
 
 
-async def grade_answer(question: str, answer: str, lesson_title: str):
-    """Strict independent grade of the student's reply to the mentor's last question. Returns (topic, result) or None."""
+async def grade_answer(question: str, answer: str, lesson_title: str, topics: list[str]):
+    """Strict independent grade of the student's reply to the mentor's last question. Returns (topic, result, level) or None."""
+    known = "; ".join(topics[:40]) or "(none yet)"
     sysmsg = ("You grade a beginner's spoken answer (speech-to-text, so ignore small word errors) to a tutor's question. "
-              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"2-4 word stable topic name\", \"result\": \"hit\"|\"miss\"}. "
-              "gradable=false if the tutor did not ask a question needing knowledge or reasoning, or the reply is just okay/sure/I don't know. "
-              "Be strict: result is hit ONLY if every key part is correct; partial, vague or reversed reasoning is miss. "
-              f"Lesson context: {lesson_title}.")
-    j = _json(await _quick(sysmsg, f"TUTOR QUESTION: {question[-700:]}\nSTUDENT ANSWER: {answer}"))
+              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"...\", \"result\": \"hit\"|\"miss\", \"level\": 1-4}. "
+              "gradable=false if the tutor's turn was an offer or check-in rather than a question needing knowledge or reasoning, if the student asked a question back, "
+              "or if the reply is just okay/sure/I don't know. "
+              "topic: choose EXACTLY one name from the known topics if it fits, otherwise a new 2-4 word name. "
+              "level is the difficulty of the QUESTION: 1 recall/recognise, 2 apply to a new small case, 3 exam-style scenario with distractors, 4 professional transfer or design trade-off. "
+              "Be strict but fair: hit only if every key part of the answer is correct and the reasoning is not reversed; a clearly correct paraphrase is a hit; partial or reversed is miss. "
+              f"Lesson context: {lesson_title}. Known topics: {known}")
+    j = _json(await _quick(sysmsg, f"TUTOR TURN: {question[-700:]}\nSTUDENT ANSWER: {answer}"))
     if j and j.get("gradable") and j.get("topic") and j.get("result") in ("hit", "miss"):
-        return j["topic"], j["result"]
+        topic = str(j["topic"]).strip()
+        for k in topics:
+            if k.lower() == topic.lower():
+                topic = k
+        lvl = j.get("level") if isinstance(j.get("level"), int) else 0
+        return topic, j["result"], lvl
+    return None
+
+
+async def factcheck(lesson: str, mentor_text: str) -> str:
+    """Independent check of what the mentor just said against the lesson page and basic arithmetic. Returns a correction or ''."""
+    sysmsg = ("You fact-check a tutor's spoken turn. Compare it to the LESSON PAGE and to arithmetic/logic. Flag ONLY clear errors "
+              "(a wrong number, wrong formula, wrong AWS service behaviour, contradicting the lesson page, a reversed logical relation). "
+              "Do not flag style, omissions, or things merely not in the lesson. Reply ONLY JSON: {\"error\": \"one sentence stating what was wrong and the correct fact\"} "
+              "or {\"error\": \"\"}.")
+    j = _json(await _quick(sysmsg, f"LESSON PAGE:\n{lesson[:14000]}\n\nTUTOR TURN:\n{mentor_text}", 140))
+    return (j or {}).get("error", "") or ""
+
+
+async def make_todo(recent: str, lesson_title: str):
+    sysmsg = ("The tutor just promised the student a homework item but forgot to create it. From the transcript, write that homework. "
+              "Reply ONLY JSON: {\"title\": \"short action title\", \"detail\": \"step by step instructions: exactly what to do, where, how long, how he knows it is done; steps separated by \\\\n\"}.")
+    j = _json(await _quick(sysmsg, f"Lesson: {lesson_title}\nTranscript:\n{recent[-2500:]}", 400))
+    if j and j.get("title"):
+        return j["title"], str(j.get("detail", "")).replace("\\n", "\n")
     return None
 
 
@@ -325,8 +409,9 @@ async def judge_sections(remaining: list[dict], recent_mentor_text: str):
     if not remaining:
         return []
     listing = "\n".join(f"{x['id']}: {x['title']}" for x in remaining)
-    sysmsg = ("You check which lesson sections a tutor has ACTUALLY TAUGHT (explained in substance, not just mentioned) in the transcript. "
-              "Reply ONLY JSON: {\"covered\": [ids]}. Use only ids from the list; empty list if none.")
+    sysmsg = ("You check which lesson sections a tutor has ACTUALLY TAUGHT in the transcript. A section counts only if its core idea was explained in substance "
+              "(not merely mentioned or previewed) AND the student then attempted at least one application, prediction or explanation of it. "
+              "Reply ONLY JSON: {\"covered\": [ids]}. Use only ids from the list; empty list if none. When in doubt, leave it out.")
     j = _json(await _quick(sysmsg, f"SECTIONS NOT YET COVERED:\n{listing}\n\nTUTOR TRANSCRIPT:\n{recent_mentor_text[-3500:]}", 120))
     ids = {x["id"] for x in remaining}
     return [i for i in (j or {}).get("covered", []) if i in ids]

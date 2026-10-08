@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS coverage (
 CREATE TABLE IF NOT EXISTS todos (
   id INTEGER PRIMARY KEY AUTOINCREMENT, track TEXT, day INTEGER, title TEXT, detail TEXT,
   done INTEGER DEFAULT 0, created REAL, done_at REAL);
+CREATE TABLE IF NOT EXISTS mastery (
+  track TEXT, topic TEXT, level INTEGER DEFAULT 0, next_due REAL, hits INTEGER DEFAULT 0, misses INTEGER DEFAULT 0,
+  last_result TEXT, updated REAL, PRIMARY KEY (track, topic));
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, track TEXT, day INTEGER, mode TEXT, started REAL, ended REAL);
 """
@@ -76,7 +79,50 @@ def done_days(track: str) -> list[int]:
         return [r["day"] for r in c.execute("SELECT day FROM day_progress WHERE track=? AND status='done' ORDER BY day", (track,))]
 
 
-def log_topic(track: str, topic: str, result: str):
+INTERVAL_DAYS = {0: 0.5, 1: 1, 2: 3, 3: 7, 4: 21}
+LEVEL_NAMES = {0: "taught", 1: "recognizes", 2: "applies", 3: "exam-style", 4: "professional"}
+
+
+def _mastery_update(c, track: str, topic: str, result: str, asked_level: int):
+    row = c.execute("SELECT level, hits, misses FROM mastery WHERE track=? AND topic=?", (track, topic)).fetchone()
+    level, hits, misses = (row["level"], row["hits"], row["misses"]) if row else (0, 0, 0)
+    now = time.time()
+    asked_level = max(1, min(4, asked_level or max(1, level)))
+    if result == "hit":
+        level, hits = max(level, asked_level), hits + 1
+        due = now + INTERVAL_DAYS[level] * 86400
+    else:
+        level, misses = max(0, min(level, asked_level) - 1), misses + 1
+        due = now + 0.5 * 86400
+    c.execute("INSERT INTO mastery(track,topic,level,next_due,hits,misses,last_result,updated) VALUES(?,?,?,?,?,?,?,?) "
+              "ON CONFLICT(track,topic) DO UPDATE SET level=excluded.level,next_due=excluded.next_due,hits=excluded.hits,"
+              "misses=excluded.misses,last_result=excluded.last_result,updated=excluded.updated",
+              (track, topic, level, due, hits, misses, result, now))
+
+
+def due_topics(track: str, limit: int = 4) -> list[dict]:
+    with conn() as c:
+        rows = c.execute("SELECT topic, level, misses, last_result FROM mastery WHERE track=? AND next_due<=? "
+                         "ORDER BY (last_result='miss') DESC, next_due ASC LIMIT ?", (track, time.time(), limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def mastery_map(track: str, limit: int = 30) -> list[dict]:
+    with conn() as c:
+        rows = c.execute("SELECT topic, level, hits, misses FROM mastery WHERE track=? ORDER BY updated DESC LIMIT ?", (track, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def readiness(track: str) -> dict:
+    """Share of known topics at exam-style (3) or above, plus the average level."""
+    rows = mastery_map(track, 500)
+    if not rows:
+        return {"topics": 0, "avg_level": 0.0, "pro_share": 0.0}
+    return {"topics": len(rows), "avg_level": round(sum(r["level"] for r in rows) / len(rows), 2),
+            "pro_share": round(sum(1 for r in rows if r["level"] >= 3) / len(rows), 2)}
+
+
+def log_topic(track: str, topic: str, result: str, level: int = 0):
     topic = topic.strip()[:80]
     if not topic:
         return
@@ -87,6 +133,7 @@ def log_topic(track: str, topic: str, result: str):
             f"ON CONFLICT(track,topic) DO UPDATE SET {col}={col}+1, last_seen=excluded.last_seen",
             (track, topic, time.time()),
         )
+        _mastery_update(c, track, topic, "miss" if result == "miss" else "hit", level)
 
 
 def weak_topics(track: str, limit: int = 6) -> list[dict]:
