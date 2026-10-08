@@ -1,9 +1,37 @@
 """Coverage and carry-forward: which lesson sections are done, and what earlier days still owe."""
+import json
+from functools import lru_cache
+from pathlib import Path
+
 import content
 import db
 
+SKILLS_PATH = Path(__file__).resolve().parent.parent / "data" / "skills.json"
+
 
 OPTIONAL = {"sources", "preview", "recap", "lab", "quiz", "references"}
+
+
+@lru_cache(maxsize=1)
+def _skills_all() -> dict:
+    try:
+        return json.loads(SKILLS_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def section_meta(track: str, day: int) -> dict:
+    """{section_id: {"kind": teach|assignment|practice, "skills": [..]}} from data/skills.json (empty if not generated)."""
+    return _skills_all().get(f"{track}:{day}", {})
+
+
+def skills_for_day(track: str, day: int) -> list[str]:
+    seen, out = set(), []
+    for m in section_meta(track, day).values():
+        for k in m.get("skills", []):
+            if k.lower() not in seen:
+                seen.add(k.lower()); out.append(k)
+    return out
 
 
 def sections_of(track: str, day: int) -> list[dict]:
@@ -12,8 +40,19 @@ def sections_of(track: str, day: int) -> list[dict]:
 
 
 def remaining(track: str, day: int) -> list[dict]:
+    """Sections not yet covered. Assignment sections count once a homework item exists for the day; practice sections once he has attempted an exam-style item."""
     done = db.covered_sections(track, day)
-    return [s for s in sections_of(track, day) if s["id"] not in done]
+    meta = section_meta(track, day)
+    has_todo = db.has_todo_for_day(track, day)
+    out = []
+    for s in sections_of(track, day):
+        if s["id"] in done:
+            continue
+        kind = meta.get(s["id"], {}).get("kind", "teach")
+        if (kind == "assignment" and has_todo) or (kind == "practice" and "__l3__" in done):
+            continue
+        out.append(s)
+    return out
 
 
 def backlog(track: str, day: int, limit: int = 8) -> tuple[list[dict], int]:

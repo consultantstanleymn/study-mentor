@@ -238,3 +238,8 @@ def set_todo_done(todo_id: int, done: bool):
 def open_todos(track: str) -> list[dict]:
     with conn() as c:
         return [dict(r) for r in c.execute("SELECT title, day FROM todos WHERE track=? AND done=0 ORDER BY created", (track,))]
+
+
+def has_todo_for_day(track: str, day: int) -> bool:
+    with conn() as c:
+        return c.execute("SELECT 1 FROM todos WHERE track=? AND day=? LIMIT 1", (track, day)).fetchone() is not None

@@ -67,8 +67,9 @@ FINAL_REMINDERS = """=== FINAL REMINDERS (these override anything above if they 
 2. EVIDENCE: "okay", "sure", "yes", "makes sense" are not evidence he understood. After every second teaching turn, ask one generative check he must answer with his own words (predict, apply to a new mini case, or say it back). Never end two turns in a row with "make sense?".
 3. HONEST GRADING: before praising, check EVERY part of his answer. If any part is wrong, reversed or vague, name the exact wrong part first, then correct it. Do not say "exactly", "perfect" or "great" unless the whole answer is right. When he answers fast and confidently, test with a counter-case that changes one constraint before agreeing.
 4. NEVER narrate the machinery: do not say you are marking sections covered, logging, or saving, unless you emit the tag. If you say you added homework you MUST emit the <todo> tag in the same reply. Never say "I put that on your list" without the tag.
-5. ACCURACY: if a fact is recent, version-specific or you are not sure (AWS naming such as Control Tower controls being preventive, detective or proactive, limits, prices), say you are not certain and what to verify. Never invent numbers like "the low tens of accounts". The lesson page is the source of truth.
-6. If a system note says a day_done was refused, do NOT say goodbye. Teach the named sections starting this very turn.
+5. ACCURACY: if a fact is recent, version-specific or you are not sure (AWS naming such as Control Tower controls being preventive, detective or proactive, limits, prices), say you are not certain and what to verify. Never invent numbers or rules of thumb. The lesson page is the source of truth.
+6. Never take blame you did not earn: if he got something wrong, say so kindly and name his error; do not say the confusion was yours. Never claim it is day one or the first session unless the opening note says so.
+7. If a system note says a day_done was refused, do NOT say goodbye. Teach the named sections starting this very turn.
 """
 
 MODE_RULES = {
@@ -113,6 +114,14 @@ def question_bank(track: str, day: int, limit: int = 20) -> str:
         ans = letters[q["correct"]] if isinstance(q["correct"], int) and q["correct"] < len(q["options"]) else "?"
         out.append(f"Q{i}. {q['q']}\n   Options: {opts}\n   Correct: {ans}. Why: {q['explanation']}")
     return "\n".join(out)
+
+
+def skills_block(track: str, day: int) -> str:
+    import progress
+    meta = progress.section_meta(track, day)
+    if not meta:
+        return "(not generated; invent short stable skill names)"
+    return "\n".join(f"- [{sid}] ({m.get('kind','teach')}): " + "; ".join(m.get("skills", [])) for sid, m in meta.items())
 
 
 def mastery_block(track: str) -> str:
@@ -173,6 +182,7 @@ def system_prompt(track: str, day: int, mode: str) -> str:
         f"MISTAKES CARRIED FORWARD (missed more than hit; re-test these early today with a fresh scenario, log hit or miss, and a topic only clears once he gets it right): {weak_s}",
         f"RECENT SESSION DEBRIEFS (what he learned, what went wrong, where to start):\n{notes_s}",
         "OPEN HOMEWORK ON HIS LIST (do not re-assign; ask about these): " + ("; ".join(t["title"] for t in db.open_todos(track)) or "none"),
+        "SKILLS TO TRACK TODAY (use these exact names as the topic in <log> tags; each section has a kind: teach, assignment or practice):\n" + skills_block(track, day),
         "=== TODAY'S MATERIAL (private source; do not read aloud) ===\n" + lesson,
         "=== TODAY'S QUESTION BANK ===\n" + question_bank(track, day),
     ]

@@ -65,6 +65,13 @@ async def mentor_turn(conv, text, opener=False):
 async def run(track, day, persona, turns, mode, rng, key):
     for d in range(1, day):
         db.mark_day(track, d, "done")  # earlier days count as finished legacy days
+    if os.environ.get("SIM_SEED") and day > 1:  # pretend yesterday happened: some skills due for review, one recently missed
+        import time as _t
+        sk = progress.skills_for_day(track, day - 1)[:4]
+        with db.conn() as c:
+            for i, k in enumerate(sk):
+                c.execute("INSERT OR REPLACE INTO mastery(track,topic,level,next_due,hits,misses,last_result,updated) VALUES(?,?,?,?,?,?,?,?)",
+                          (track, k, 1 + i % 2, _t.time() - 3600, 1, 1 if i == 0 else 0, "miss" if i == 0 else "hit", _t.time() - 86400))
     conv = tutor.Conversation(track, day, mode)
     P = PERSONAS[persona]
     lines, hist = [], []
@@ -99,4 +106,5 @@ async def main():
         p = ROOT / "evals" / "out" / f"{label}-{track}{day}-{persona}.md"; p.write_text("\n".join(out)); return p
     for p in await asyncio.gather(*[one(s) for s in specs]): print(p)
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())

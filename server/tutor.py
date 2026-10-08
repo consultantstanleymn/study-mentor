@@ -145,13 +145,33 @@ OFFER = re.compile(r"(want (me )?to|want an|ready\?|shall we|should (we|i)|make 
 PRAISE = re.compile(r"^(exactly|perfect|precisely|that'?s (exactly )?right|correct|yes[,.!]|great|spot on|right[,.!])", re.I)
 MACHINERY = re.compile(r"\b(mark(ing|ed)?|log(ging|ged)?|record(ing|ed)?|sav(e|ing|ed))\b[^.?!]{0,40}\b(cover(ed)?|section|that|this|answer|correct(ly)?|progress|miss|hit)\b|\bI('ve| have) covered\b|\bsection[^.?!]{0,30}\bcovered\b", re.I)
 HW_PROMISE = re.compile(r"\b(I'?ll|I will|I'?ve|I have|let me|I'?m going to|going to)\b[^.?!]{0,40}\b(add|put|added|assign|assigned|give|save|drop)\b[^.?!]{0,50}\b(list|to-?do|homework|assignment)", re.I)
-BOARD_PROMISE = re.compile(r"(look at the board|on the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
+BOARD_PROMISE = re.compile(r"(look at the board|(see|on|check|at) the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
 
 ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
 MAX_SENTENCES = 8
 
 
 class Conversation:
+    def _pressure_hint(self) -> str:
+        """Server-driven nudges so exam-tier items and real application questions actually happen."""
+        import db
+        out = ""
+        cov = len([x for x in db.covered_sections(self.track, self.day) if x != "__l3__"])
+        if self.mode in ("teach", "review") and (cov - self.l3_cov_mark >= 2 or (self.turns >= 10 and self.l3_asked == 0)):
+            bank = prompts.content.load_day(self.track, self.day)
+            qs = (bank or {}).get("questions") or []
+            if qs and self.bank_idx < len(qs):
+                out += (f"\n\n(System: it is time for ONE exam-tier (L3) item. Use Q{self.bank_idx + 1} from today's question bank: paraphrase the stem, read options A to D briefly, "
+                        "and do not explain until he commits to an answer. Log it with level=\"3\".)")
+                self.bank_idx += 1
+            else:
+                out += ("\n\n(System: it is time for ONE exam-tier (L3) item. Write an ORIGINAL full item: AWS = a 3 to 4 sentence business scenario with four options and a named distractor; "
+                        "LSAT = a 4 to 6 sentence stimulus with a question stem and five answer choices; quant = an interview-style puzzle. Do not explain until he commits. Log it with level=\"3\".)")
+            self.l3_cov_mark = cov; self.l3_asked += 0
+        if self.since_graded >= 3:
+            out += "\n\n(System: he has not answered a real question in 3 turns. This turn MUST end with a concrete application question he can answer, not a check-in.)"
+        return out
+
     def day_done_refusal(self) -> str:
         """'' if day_done may be accepted, else a system hint explaining why not."""
         import progress
@@ -172,7 +192,8 @@ class Conversation:
         if n <= 1 and not notes:
             import content
             meta = content.TRACKS[self.track]
-            return f"Track: {meta['name']}, {meta['unit'].lower()} {self.day} of {meta['days']}. This is his very first session in this track."
+            first = "This is his first session in this app" + (f" but the track is at {meta['unit'].lower()} {self.day}, so do NOT call it day one." if self.day > 1 else ".")
+            return f"Track: {meta['name']}, {meta['unit'].lower()} {self.day} of {meta['days']}. {first}"
         import content
         meta = content.TRACKS[self.track]
         return (f"Track: {meta['name']}, {meta['unit'].lower()} {self.day} of {meta['days']}. This is NOT the first session in this track, never say it is the first or 'day one'. "
@@ -189,6 +210,11 @@ class Conversation:
         self.fact_note = ""    # correction produced by the background fact-check of the previous mentor turn
         self.fact_task = None
         self.promised_board = False
+        self.used_note = False
+        self.l3_cov_mark = 0     # covered-section count at the last exam-tier item
+        self.l3_asked = 0
+        self.since_graded = 0
+        self.bank_idx = 0
 
     def _payload(self, user_text: str | None):
         sysmsg = self.system + "\n\n" + prompts.mastery_block(self.track) + "\n\n" + prompts.coverage_block(self.track, self.day, self.turns) + "\n\n" + prompts.FINAL_REMINDERS
@@ -201,10 +227,12 @@ class Conversation:
                 except Exception:  # noqa: BLE001
                     self.fact_note = ""
                 self.fact_task = None
+            self.used_note = bool(self.fact_note)
             if self.fact_note:
                 hint += "\n\n(System: your previous turn contained an error: " + self.fact_note + " Correct it briefly and naturally at the start of this reply, then continue.)"; self.fact_note = ""
             if self.hint:
                 hint += "\n\n" + self.hint; self.hint = ""
+            hint += self._pressure_hint()
             if re.search(r"\b(draw|diagram|whiteboard|board|sketch|visuali[sz]e|illustrate|mermaid|picture)\b", user_text, re.I):
                 hint += "\n\n(System note: he asked to see it. Emit a NEW <board> tag in this reply, with <layout board=\"wide\"/> first, then walk through it with <focus/> tags.)"
             msgs.append({"role": "user", "content": user_text + hint})
@@ -247,6 +275,9 @@ class Conversation:
                 cover_task = asyncio.create_task(judge_sections(left, recent))
         logged = False
         emitted = {"todo": False, "board": False}
+        pending_l3: list = []
+        if not opener and user_text and not user_text.startswith("("):
+            self.since_graded += 1
         headers = {"Authorization": f"Bearer {api_key()}", "Content-Type": "application/json"}
 
         def handle(events):
@@ -256,6 +287,9 @@ class Conversation:
                     logged = True
                     if ev[2] == "hit":
                         self.hits += 1
+                    self.since_graded = 0
+                    if len(ev) > 3 and ev[3] and ev[3] >= 3:
+                        self.l3_asked += 1; pending_l3.append(1)
                 elif ev[0] in ("todo", "board"):
                     emitted[ev[0]] = True
                 if ev[0] == "speech":
@@ -291,8 +325,9 @@ class Conversation:
                         if delta:
                             for ev in handle(parser.feed(delta)):
                                 yield ev
-                        if len(spoken) >= (5 if opener else MAX_SENTENCES):
-                            truncated = True
+                        cap = 5 if opener else MAX_SENTENCES
+                        if len(spoken) >= cap and (spoken[-1].endswith("?") or len(spoken) >= cap + 3):
+                            truncated = not spoken[-1].endswith("?")
                             break
             for ev in handle(parser.flush()):
                 yield ev
@@ -302,11 +337,16 @@ class Conversation:
                     spoken.append(s)
                     yield ("sentence", s)
             said = " ".join(spoken)
+            if pending_l3:
+                yield ("covered", "__l3__")
             if grade_task:
                 g = await grade_task
                 if g and not logged:
+                    self.since_graded = 0
                     if g[1] == "hit":
                         self.hits += 1
+                    if g[2] >= 3:
+                        self.l3_asked += 1; yield ("covered", "__l3__")
                     elif spoken and PRAISE.search(spoken[0]):
                         self.fact_note = self.fact_note or "You praised an answer that was actually flawed or incomplete. Name the exact flaw now, kindly, before moving on."
                     yield ("log", g[0], g[1], g[2])
@@ -319,7 +359,7 @@ class Conversation:
                     yield ("todo", t[0], t[1])
             if BOARD_PROMISE.search(said) and not emitted["board"]:
                 self.fact_note = (self.fact_note + " " if self.fact_note else "") + "You said you would show or draw something on the board but emitted no <board> tag. Emit the board now with the next sentence."
-            if said and not opener and self.fact_task is None:
+            if said and not opener and self.fact_task is None and not self.used_note:
                 self.fact_task = asyncio.create_task(factcheck(prompts.content.lesson_text(self.track, self.day), said))
         except httpx.HTTPError as e:
             yield ("error", f"Network problem talking to the model: {e}")
@@ -363,6 +403,18 @@ def _json(text: str):
         return None
 
 
+def cap_level(question: str, lvl: int) -> int:
+    """Levels come from the question's structure, not the grader's generosity: L3 needs options or a full stimulus, L4 needs changed constraints or critique too."""
+    opts = len(re.findall(r"(?:^|[\s(])[A-E][.):]\s", question))
+    long_q = len(question.split()) >= 60
+    structured = opts >= 3 or long_q
+    if lvl >= 3 and not structured:
+        lvl = 2
+    if lvl >= 4 and not re.search(r"(what if|now suppose|suppose now|trade-?off|critique|changes? (one|the) constraint|flip)", question, re.I):
+        lvl = 3
+    return lvl
+
+
 async def grade_answer(question: str, answer: str, lesson_title: str, topics: list[str]):
     """Strict independent grade of the student's reply to the mentor's last question. Returns (topic, result, level) or None."""
     known = "; ".join(topics[:40]) or "(none yet)"
@@ -372,7 +424,7 @@ async def grade_answer(question: str, answer: str, lesson_title: str, topics: li
               "or if the reply is just okay/sure/I don't know. "
               "topic: choose EXACTLY one name from the known topics if it fits, otherwise a new 2-4 word name. "
               "level is the difficulty of the QUESTION: 1 recall/recognise, 2 apply to a new small case, 3 exam-style scenario with distractors, 4 professional transfer or design trade-off. "
-              "Be strict but fair: hit only if every key part of the answer is correct and the reasoning is not reversed; a clearly correct paraphrase is a hit; partial or reversed is miss. "
+              "If the stated verdict (yes/no, which option) contradicts the student's own stated reasoning, it is a miss. Be strict but fair: hit only if every key part of the answer is correct and the reasoning is not reversed; a clearly correct paraphrase is a hit; partial or reversed is miss. "
               f"Lesson context: {lesson_title}. Known topics: {known}")
     j = _json(await _quick(sysmsg, f"TUTOR TURN: {question[-700:]}\nSTUDENT ANSWER: {answer}"))
     if j and j.get("gradable") and j.get("topic") and j.get("result") in ("hit", "miss"):
@@ -380,19 +432,27 @@ async def grade_answer(question: str, answer: str, lesson_title: str, topics: li
         for k in topics:
             if k.lower() == topic.lower():
                 topic = k
-        lvl = j.get("level") if isinstance(j.get("level"), int) else 0
+        lvl = cap_level(question, j.get("level") if isinstance(j.get("level"), int) else 0)
         return topic, j["result"], lvl
     return None
 
 
 async def factcheck(lesson: str, mentor_text: str) -> str:
-    """Independent check of what the mentor just said against the lesson page and basic arithmetic. Returns a correction or ''."""
-    sysmsg = ("You fact-check a tutor's spoken turn. Compare it to the LESSON PAGE and to arithmetic/logic. Flag ONLY clear errors "
-              "(a wrong number, wrong formula, wrong AWS service behaviour, contradicting the lesson page, a reversed logical relation). "
-              "Do not flag style, omissions, or things merely not in the lesson. Reply ONLY JSON: {\"error\": \"one sentence stating what was wrong and the correct fact\"} "
-              "or {\"error\": \"\"}.")
-    j = _json(await _quick(sysmsg, f"LESSON PAGE:\n{lesson[:14000]}\n\nTUTOR TURN:\n{mentor_text}", 140))
-    return (j or {}).get("error", "") or ""
+    """Independent check of the mentor's turn. A lesson-based correction needs a verbatim quote from the lesson page that contradicts the claim;
+    arithmetic errors need none. Returns a one-sentence correction or ''."""
+    sysmsg = ("You fact-check a tutor's spoken turn against the LESSON PAGE and basic arithmetic. Flag ONLY clear errors: a wrong computed number, "
+              "or a claim that a quoted line of the lesson page directly contradicts. Never flag something merely absent from the page, and never flag wording. "
+              "Reply ONLY JSON: {\"kind\": \"arithmetic\"|\"lesson\"|\"none\", \"quote\": \"verbatim lesson line (for kind lesson)\", \"error\": \"one sentence: what was wrong and the correct fact\"}.")
+    j = _json(await _quick(sysmsg, f"LESSON PAGE:\n{lesson[:14000]}\n\nTUTOR TURN:\n{mentor_text}", 200)) or {}
+    kind, err = j.get("kind"), (j.get("error") or "").strip()
+    if not err or kind not in ("arithmetic", "lesson"):
+        return ""
+    if kind == "lesson":
+        norm = lambda t: re.sub(r"\W+", " ", t).lower().strip()
+        q = norm(j.get("quote") or "")
+        if len(q) < 20 or q not in norm(lesson):
+            return ""
+    return err
 
 
 async def make_todo(recent: str, lesson_title: str):
@@ -410,7 +470,7 @@ async def judge_sections(remaining: list[dict], recent_mentor_text: str):
         return []
     listing = "\n".join(f"{x['id']}: {x['title']}" for x in remaining)
     sysmsg = ("You check which lesson sections a tutor has ACTUALLY TAUGHT in the transcript. A section counts only if its core idea was explained in substance "
-              "(not merely mentioned or previewed) AND the student then attempted at least one application, prediction or explanation of it. "
+              "(not merely mentioned or previewed) AND the student then engaged with it (answered a related question, predicted or explained something about it, even imperfectly). "
               "Reply ONLY JSON: {\"covered\": [ids]}. Use only ids from the list; empty list if none. When in doubt, leave it out.")
     j = _json(await _quick(sysmsg, f"SECTIONS NOT YET COVERED:\n{listing}\n\nTUTOR TRANSCRIPT:\n{recent_mentor_text[-3500:]}", 120))
     ids = {x["id"] for x in remaining}
