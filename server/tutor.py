@@ -1,4 +1,5 @@
 """Conversation with the tutor model: streaming, hidden-tag parsing, sentence splitting."""
+import asyncio
 import json
 import os
 import re
@@ -134,19 +135,41 @@ class SentenceSplitter:
         return [sent] if sent else []
 
 
+def content_title(track: str, day: int) -> str:
+    import content
+    d = content.load_day(track, day)
+    return d["title"] if d else ""
+
+
+ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
+MAX_SENTENCES = 8
+
+
 class Conversation:
+    def _last_session_fact(self) -> str:
+        import db
+        notes = db.recent_notes(self.track, 1)
+        with db.conn() as c:
+            n = c.execute("SELECT COUNT(*) AS n FROM sessions WHERE track=?", (self.track,)).fetchone()["n"]
+        if n <= 1 and not notes:
+            return "This is his very first session in this track."
+        return "This is NOT the first session. " + (f"Last session debrief: {notes[-1]['note'][:300]}" if notes else "")
+
     def __init__(self, track: str, day: int, mode: str):
         self.track, self.day, self.mode = track, day, mode
         self.system = prompts.system_prompt(track, day, mode)
         self.messages: list[dict] = []
         self.hint = ""  # one-shot system note for the next turn (e.g. a refused day_done)
+        self.assent_run = 0
+        self.turns = 0
 
     def _payload(self, user_text: str | None):
-        msgs = [{"role": "system", "content": self.system + "\n\n" + prompts.coverage_block(self.track, self.day)}] + self.messages[-MAX_HISTORY:]
-        if self.hint:
-            msgs.append({"role": "system", "content": self.hint}); self.hint = ""
+        sysmsg = self.system + "\n\n" + prompts.coverage_block(self.track, self.day) + "\n\n" + prompts.FINAL_REMINDERS
+        msgs = [{"role": "system", "content": sysmsg}] + self.messages[-MAX_HISTORY:]
         if user_text is not None:
             hint = ""
+            if self.hint:
+                hint += "\n\n" + self.hint; self.hint = ""
             if re.search(r"\b(draw|diagram|whiteboard|board|sketch|visuali[sz]e|illustrate|mermaid|picture)\b", user_text, re.I):
                 hint = "\n\n(System note: he asked to see it. Emit a NEW <board> tag in this reply, with <layout board=\"wide\"/> first, then walk through it with <focus/> tags.)"
             msgs.append({"role": "user", "content": user_text + hint})
@@ -156,7 +179,7 @@ class Conversation:
             "stream": True,
             "thinking": {"type": "disabled"},
             "temperature": 0.8,
-            "max_tokens": 500,
+            "max_tokens": 320 if user_text and user_text.startswith("(Stanley just opened") else 420,
         }
 
     async def respond(self, user_text: str | None, opener: bool = False):
@@ -164,13 +187,34 @@ class Conversation:
         | ('day_done',) | ('note', str) | ('error', str). Whatever was emitted counts as said (kept in history),
         even if the caller stops early (barge-in)."""
         if opener:
-            user_text = "(Stanley just opened the app and is ready. Begin the session now, following the session shape.)"
+            user_text = "(Stanley just opened the app and is ready. Begin the session now, following the session shape. " + self._last_session_fact() + ")"
+        elif user_text is not None and not user_text.startswith("("):
+            self.assent_run = self.assent_run + 1 if ASSENT.match(user_text.strip()) else 0
+            if self.assent_run >= 2:
+                self.hint = ("(System: he has now said only okay/sure/yes " + str(self.assent_run) + " times in a row. That is NOT evidence of understanding. "
+                             "Do not advance. Warmly ask him to say the idea back in his own words or predict a tiny case, and make it easy to answer.)")
         parser, splitter = TagParser(), SentenceSplitter()
         spoken: list[str] = []
+        truncated = False
+        import progress
+        grade_task = cover_task = None
+        prev = next((m["content"] for m in reversed(self.messages) if m["role"] == "assistant"), "")
+        if user_text and not opener and not user_text.startswith("(") and prev.rstrip().endswith("?") and not ASSENT.match(user_text.strip()):
+            grade_task = asyncio.create_task(grade_answer(prev, user_text, content_title(self.track, self.day)))
+        self.turns += 1
+        if not opener and self.turns % 3 == 0:
+            left = progress.remaining(self.track, self.day)
+            if left:
+                recent = "\n".join(m["content"] for m in self.messages[-12:] if m["role"] == "assistant")
+                cover_task = asyncio.create_task(judge_sections(left, recent))
+        logged = False
         headers = {"Authorization": f"Bearer {api_key()}", "Content-Type": "application/json"}
 
         def handle(events):
             for ev in events:
+                if ev[0] == "log":
+                    nonlocal logged
+                    logged = True
                 if ev[0] == "speech":
                     yield ("speech", ev[1])
                     for s in splitter.feed(ev[1]):
@@ -195,19 +239,32 @@ class Conversation:
                         if data == "[DONE]":
                             break
                         try:
-                            delta = json.loads(data)["choices"][0]["delta"].get("content") or ""
+                            ch = json.loads(data)["choices"][0]
+                            delta = ch["delta"].get("content") or ""
+                            if ch.get("finish_reason") == "length":
+                                truncated = True
                         except Exception:
                             continue
                         if delta:
                             for ev in handle(parser.feed(delta)):
                                 yield ev
+                        if len(spoken) >= (5 if opener else MAX_SENTENCES):
+                            truncated = True
+                            break
             for ev in handle(parser.flush()):
                 yield ev
-            for s in splitter.flush():
+            for s in ([] if truncated else splitter.flush()):
                 s = re.sub(r"[*_`#]+", "", s).replace("\u2014", ", ").replace("\u2013", ", ").strip()
                 if s:
                     spoken.append(s)
                     yield ("sentence", s)
+            if grade_task:
+                g = await grade_task
+                if g and not logged:
+                    yield ("log", g[0], g[1])
+            if cover_task:
+                for sid in await cover_task:
+                    yield ("covered", sid)
         except httpx.HTTPError as e:
             yield ("error", f"Network problem talking to the model: {e}")
         finally:
@@ -229,3 +286,47 @@ async def debrief(track: str, day: int, messages: list[dict]) -> str:
     async with httpx.AsyncClient(timeout=40) as client:
         r = await client.post(API_URL, headers={"Authorization": f"Bearer {api_key()}"}, json=body)
         return r.json()["choices"][0]["message"]["content"].strip()
+
+
+async def _quick(system: str, user: str, max_tokens: int = 160) -> str:
+    body = {"model": MODEL, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "thinking": {"type": "disabled"}, "temperature": 0, "max_tokens": max_tokens}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(API_URL, headers={"Authorization": f"Bearer {api_key()}"}, json=body)
+            return r.json()["choices"][0]["message"]["content"].strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _json(text: str):
+    m = re.search(r"\{.*\}", text, re.S)
+    try:
+        return json.loads(m.group(0)) if m else None
+    except ValueError:
+        return None
+
+
+async def grade_answer(question: str, answer: str, lesson_title: str):
+    """Strict independent grade of the student's reply to the mentor's last question. Returns (topic, result) or None."""
+    sysmsg = ("You grade a beginner's spoken answer (speech-to-text, so ignore small word errors) to a tutor's question. "
+              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"2-4 word stable topic name\", \"result\": \"hit\"|\"miss\"}. "
+              "gradable=false if the tutor did not ask a question needing knowledge or reasoning, or the reply is just okay/sure/I don't know. "
+              "Be strict: result is hit ONLY if every key part is correct; partial, vague or reversed reasoning is miss. "
+              f"Lesson context: {lesson_title}.")
+    j = _json(await _quick(sysmsg, f"TUTOR QUESTION: {question[-700:]}\nSTUDENT ANSWER: {answer}"))
+    if j and j.get("gradable") and j.get("topic") and j.get("result") in ("hit", "miss"):
+        return j["topic"], j["result"]
+    return None
+
+
+async def judge_sections(remaining: list[dict], recent_mentor_text: str):
+    """Which not-yet-covered sections has the mentor actually taught (substantively) in the recent turns? Returns ids."""
+    if not remaining:
+        return []
+    listing = "\n".join(f"{x['id']}: {x['title']}" for x in remaining)
+    sysmsg = ("You check which lesson sections a tutor has ACTUALLY TAUGHT (explained in substance, not just mentioned) in the transcript. "
+              "Reply ONLY JSON: {\"covered\": [ids]}. Use only ids from the list; empty list if none.")
+    j = _json(await _quick(sysmsg, f"SECTIONS NOT YET COVERED:\n{listing}\n\nTUTOR TRANSCRIPT:\n{recent_mentor_text[-3500:]}", 120))
+    ids = {x["id"] for x in remaining}
+    return [i for i in (j or {}).get("covered", []) if i in ids]
