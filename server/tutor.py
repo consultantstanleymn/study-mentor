@@ -21,10 +21,34 @@ def api_key() -> str:
     return KEY_FILE.read_text().strip()
 
 
+def safe_calc(expr: str) -> str:
+    """Evaluate a plain arithmetic expression (no names except a few math functions); returns spoken text."""
+    import ast, math, operator
+    ops = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow, ast.USub: operator.neg, ast.UAdd: operator.pos}
+    fns = {"ln": math.log, "log": math.log, "exp": math.exp, "sqrt": math.sqrt, "round": round, "abs": abs}
+
+    def ev(n):
+        if isinstance(n, ast.Expression): return ev(n.body)
+        if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)): return n.value
+        if isinstance(n, ast.BinOp) and type(n.op) in ops: return ops[type(n.op)](ev(n.left), ev(n.right))
+        if isinstance(n, ast.UnaryOp) and type(n.op) in ops: return ops[type(n.op)](ev(n.operand))
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in fns and not n.keywords: return fns[n.func.id](*[ev(a) for a in n.args])
+        raise ValueError("unsupported")
+    try:
+        v = ev(ast.parse(expr.strip().replace("^", "**").replace("%", "/100"), mode="eval"))
+        if v < 0:
+            return "negative " + safe_calc(str(-v))
+        if abs(v) >= 1000 or float(v).is_integer():
+            return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.1f}"
+        return f"{v:.4g}"
+    except Exception:  # noqa: BLE001
+        return "that number"
+
+
 class TagParser:
     """Splits a token stream into speech text and hidden tags (board, log, day_done, note)."""
 
-    PAIRED = ("board", "note", "todo")
+    PAIRED = ("board", "note", "todo", "calc")
     SELF = ("log", "day_done", "focus", "layout", "covered")
 
     def __init__(self):
@@ -47,7 +71,7 @@ class TagParser:
             if i > 0:
                 yield ("speech", self.buf[:i])
                 self.buf = self.buf[i:]
-            m = re.match(r"<(board|note|todo|log|day_done|focus|layout|covered)\b", self.buf)
+            m = re.match(r"<(board|note|todo|calc|log|day_done|focus|layout|covered)\b", self.buf)
             if not m:
                 # could still be a partial tag name like "<boa"
                 if not final and any(t.startswith(self.buf[1:]) for t in self.PAIRED + self.SELF) and len(self.buf) < 12:
@@ -91,6 +115,8 @@ class TagParser:
                     yield ("board", {"title": attrs.get("title", ""), "kind": attrs.get("kind", "points"), "body": body})
                 elif name == "todo":
                     yield ("todo", attrs.get("title", ""), body)
+                elif name == "calc":
+                    yield ("speech", safe_calc(body))
                 else:
                     yield ("note", body)
 
@@ -135,6 +161,11 @@ class SentenceSplitter:
         return [sent] if sent else []
 
 
+def db_has_todo(track: str, day: int) -> bool:
+    import db
+    return db.has_todo_for_day(track, day)
+
+
 def content_title(track: str, day: int) -> str:
     import content
     d = content.load_day(track, day)
@@ -148,6 +179,9 @@ HW_PROMISE = re.compile(r"\b(I'?ll|I will|I'?ve|I have|let me|I'?m going to|goin
 BOARD_PROMISE = re.compile(r"(look at the board|(see|on|check|at) the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
 
 STOP_SIGNAL = re.compile(r"\b(that'?s (all|it|enough)|i('?m| am) (done|tired|out)|let'?s (stop|wrap|call it)|wrap (it )?up|end (the )?(session|class)|(today|day) (is|has been) (done|complete|over)|i have to go|gotta go|mark (today|it|this) (as )?(complete|done))\b", re.I)
+GRADE_SWAPS = [(re.compile(r"\b(that'?s|that was|it'?s|this is) a (clean |solid )?hit\b", re.I), "that's right"),
+               (re.compile(r"\b(that'?s|that was|it'?s|this is) a (clean )?miss\b", re.I), "that's not quite it"),
+               (re.compile(r"\b(a )?(clean |solid )?hit\b(?= on| for)", re.I), "right"), (re.compile(r"\b(logged|graded) (as )?(a )?(hit|miss)\b", re.I), "noted")]
 GRADE_WORDS = re.compile(r"\b(that'?s|that was|it'?s|a|clean|logged as|graded as|call that|counts as)\s+(a\s+)?(clean\s+)?(hit|miss)\b[.,!]?\s*", re.I)
 NAME = re.compile(r",?\s*\bStanley\b(?=[,.!?]|\s)[,.]?", re.I)
 ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
@@ -224,8 +258,13 @@ class Conversation:
 
     def _pressure_hint(self) -> str:
         """Server-driven nudges so exam-tier items and real application questions actually happen."""
-        import db
+        import db, progress
         out = ""
+        if not self.closing and not progress.remaining(self.track, self.day):
+            if self.complete_base is None:
+                self.complete_base = self.graded_total
+            elif self.graded_total > self.complete_base:
+                self.closing = True
         if self.closing:
             out += "\n\n(System: he wants to stop. No new questions or material. Give a 2 sentence recap, emit the <todo> homework if none yet, a hook for tomorrow, then <note> and <day_done/>.)"
             return out
@@ -297,6 +336,8 @@ class Conversation:
         self.used_items = set()
         self.item = None
         self.name_turn = -10
+        self.graded_total = 0
+        self.complete_base = None
         self.item_tries = 0
         self.closing = False
         self.warm_idx = 0
@@ -370,7 +411,7 @@ class Conversation:
             if verdict == "OPEN":
                 import db, progress as _pg
                 known = _pg.skills_for_day(self.track, self.day) + [m["topic"] for m in db.mastery_map(self.track, 40)]
-                verdict = await grade_answer(item_note[0], user_text, content_title(self.track, self.day), known, item_note[1])
+                verdict = await grade_answer(item_note[0], user_text, content_title(self.track, self.day), known, item_note[1], think=(self.track == "quant"))
                 item_note = None
                 if verdict and verdict[1] != "unsure":
                     verdict = (verdict[0], verdict[1], 3, verdict[3]); self.verdict_note = self._verdict_note(verdict)
@@ -378,12 +419,14 @@ class Conversation:
                     verdict = None; self.verdict_note = "(Grader could not settle the answer to the practice item. Ask ONE short probing follow-up; do not rule yet.)"
             elif item_note:
                 self.verdict_note = item_note
+        elif real_answer and prev.rstrip().endswith("?") and ASSENT.match(user_text.strip()) and not OFFER.search(prev[-160:]):
+            self.verdict_note = "(He only said okay or sure and did not answer your question. Do not rule on anything. Re-ask it more simply, or give a smaller first step.)"
         elif (real_answer and prev.rstrip().endswith("?")
                 and not ASSENT.match(user_text.strip()) and not user_text.strip().endswith("?") and not OFFER.search(prev[-160:])):
             import db, progress as _pg
             known = _pg.skills_for_day(self.track, self.day) + [m["topic"] for m in db.mastery_map(self.track, 40)]
-            lesson_ref = prompts.content.lesson_text(self.track, self.day)
-            verdict = await grade_answer(prev, user_text, content_title(self.track, self.day), known, lesson_ref)
+            lesson_ref = prompts.ERRATA + "\n" + prompts.content.lesson_text(self.track, self.day)
+            verdict = await grade_answer(prev, user_text, content_title(self.track, self.day), known, lesson_ref, think=(self.track == "quant"))
             if verdict and verdict[1] == "unsure":
                 self.verdict_note = ("(Grader could not settle this answer. Do not rule hit or miss. Ask ONE short probing follow-up that lets him show or fix his reasoning, "
                                      "and do not tell him he is wrong yet.)")
@@ -414,7 +457,8 @@ class Conversation:
                     yield ("speech", ev[1])
                     for s in splitter.feed(ev[1]):
                         s = re.sub(r"[*_`#]+", "", s).replace("\u2014", ", ").replace("\u2013", ", ").strip()
-                        s = GRADE_WORDS.sub("", s).strip()
+                        for rx, rep in GRADE_SWAPS:
+                            s = rx.sub(rep, s)
                         if self.turns - self.name_turn < 5:
                             s = NAME.sub("", s).strip()
                         elif NAME.search(s):
@@ -428,6 +472,7 @@ class Conversation:
         try:
             if verdict:
                 self.since_graded = 0
+                self.graded_total += 1
                 if verdict[1] == "hit":
                     self.hits += 1
                 if verdict[2] >= 3:
@@ -474,7 +519,7 @@ class Conversation:
             if cover_task:
                 for sid in await cover_task:
                     yield ("covered", sid)
-            if HW_PROMISE.search(said) and not emitted["todo"] and not opener:
+            if HW_PROMISE.search(said) and not emitted["todo"] and not opener and not db_has_todo(self.track, self.day):
                 t = await make_todo("\n".join(m["content"] for m in self.messages[-6:] if m["role"] == "assistant") + "\n" + said, content_title(self.track, self.day))
                 if t:
                     yield ("todo", t[0], t[1])
@@ -505,11 +550,11 @@ async def debrief(track: str, day: int, messages: list[dict]) -> str:
         return r.json()["choices"][0]["message"]["content"].strip()
 
 
-async def _quick(system: str, user: str, max_tokens: int = 160) -> str:
+async def _quick(system: str, user: str, max_tokens: int = 160, think: bool = False) -> str:
     body = {"model": MODEL, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            "thinking": {"type": "disabled"}, "temperature": 0, "max_tokens": max_tokens}
+            "thinking": {"type": "enabled"} if think else {"type": "disabled"}, "temperature": 0, "max_tokens": max_tokens + (1500 if think else 0)}
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=90 if think else 30) as client:
             r = await client.post(API_URL, headers={"Authorization": f"Bearer {api_key()}"}, json=body)
             return r.json()["choices"][0]["message"]["content"].strip()
     except Exception:  # noqa: BLE001
@@ -536,21 +581,24 @@ def cap_level(question: str, lvl: int) -> int:
     return lvl
 
 
-async def grade_answer(question: str, answer: str, lesson_title: str, topics: list[str], reference: str = ""):
+async def grade_answer(question: str, answer: str, lesson_title: str, topics: list[str], reference: str = "", think: bool = False):
     """Strict independent grade of the student's reply to the mentor's last question. Returns (topic, result, level) or None."""
     known = "; ".join(topics[:40]) or "(none yet)"
     sysmsg = ("You grade a beginner's spoken answer (speech-to-text, so ignore small word errors) to a tutor's question. "
-              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"...\", \"result\": \"hit\"|\"miss\"|\"unsure\", \"level\": 1-4, \"flaw\": \"if miss: the exact words from the student's answer that were wrong or missing, quoted, plus the correct fact in one sentence; else empty\"}. "
+              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"...\", \"result\": \"hit\"|\"miss\"|\"unsure\", \"level\": 1-4, \"ref_quote\": \"if miss: the verbatim REFERENCE line that his answer contradicts\", \"flaw\": \"if miss: the exact words from the student's answer that were wrong or missing, quoted, plus the correct fact in one sentence; else empty\"}. "
               "gradable=false if the tutor's turn was an offer or check-in rather than a question needing knowledge or reasoning, if the student asked a question back, "
               "or if the reply is just okay/sure/I don't know. "
               "topic: choose EXACTLY one name from the known topics if it fits, otherwise a new 2-4 word name. "
               "level is the difficulty of the QUESTION: 1 recall/recognise, 2 apply to a new small case, 3 exam-style scenario with distractors, 4 professional transfer or design trade-off. "
               "If the stated verdict (yes/no, which option) contradicts the student's own stated reasoning, it is a miss. Be strict but fair: hit only if every key part of the answer is correct and the reasoning is not reversed; a clearly correct paraphrase is a hit; partial or reversed is miss. "
               f"Lesson context: {lesson_title}. Known topics: {known}" + (f"\nREFERENCE (ground truth; trust it over your own recall): {reference[:9000]}" if reference else ""))
-    j = _json(await _quick(sysmsg, f"TUTOR TURN: {question[-700:]}\nSTUDENT ANSWER: {answer}"))
+    j = _json(await _quick(sysmsg, f"TUTOR TURN: {question[-700:]}\nSTUDENT ANSWER: {answer}", 200, think=think))
     if j and j.get("gradable") and j.get("topic") and j.get("result") in ("hit", "miss", "unsure"):
-        if j["result"] == "miss" and len(str(j.get("flaw") or "")) < 12:
-            j["result"] = "unsure"
+        if j["result"] == "miss":
+            norm = lambda t: re.sub(r"\W+", " ", str(t)).lower().strip()
+            rq = norm(j.get("ref_quote") or "")
+            if len(str(j.get("flaw") or "")) < 12 or not reference or (len(rq) >= 15 and rq not in norm(reference)) or (len(rq) < 15 and think is False and False):
+                j["result"] = "unsure"
         topic = str(j["topic"]).strip()
         for k in topics:
             if k.lower() == topic.lower():
@@ -566,14 +614,14 @@ async def factcheck(lesson: str, mentor_text: str) -> str:
     sysmsg = ("You fact-check a tutor's spoken turn against the LESSON PAGE and basic arithmetic. Flag ONLY clear errors: a wrong computed number, "
               "or a claim that a quoted line of the lesson page directly contradicts. Never flag something merely absent from the page, and never flag wording. "
               "Reply ONLY JSON: {\"kind\": \"arithmetic\"|\"lesson\"|\"none\", \"quote\": \"verbatim lesson line (for kind lesson)\", \"error\": \"one sentence: what was wrong and the correct fact\"}.")
-    j = _json(await _quick(sysmsg, f"LESSON PAGE:\n{lesson[:14000]}\n\nTUTOR TURN:\n{mentor_text}", 200)) or {}
+    j = _json(await _quick(sysmsg, f"LESSON PAGE:\n{prompts.ERRATA}\n{lesson[:14000]}\n\nTUTOR TURN:\n{mentor_text}", 200)) or {}
     kind, err = j.get("kind"), (j.get("error") or "").strip()
     if not err or kind not in ("arithmetic", "lesson"):
         return ""
     if kind == "lesson":
         norm = lambda t: re.sub(r"\W+", " ", t).lower().strip()
         q = norm(j.get("quote") or "")
-        if len(q) < 20 or q not in norm(lesson):
+        if len(q) < 20 or q not in norm(prompts.ERRATA + lesson):
             return ""
     return err
 

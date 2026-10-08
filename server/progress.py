@@ -80,8 +80,17 @@ def _items_all() -> dict:
         return {}
 
 
+@lru_cache(maxsize=1)
+def _items_bad() -> frozenset:
+    try:
+        return frozenset(json.loads((ITEMS_PATH.parent / "items_bad.json").read_text()))
+    except (OSError, ValueError):
+        return frozenset()
+
+
 def item_for(track: str, day: int, section_id: str) -> dict | None:
-    return _items_all().get(f"{track}:{day}:{section_id}")
+    key = f"{track}:{day}:{section_id}"
+    return None if key in _items_bad() else _items_all().get(key)
 
 
 _SKIP_SECTION = __import__("re").compile(r"(setup|welcome|orientation|how this plan|archetype|environment|install|logistics|admin)", __import__("re").I)
@@ -100,6 +109,11 @@ def _worthy(track: str) -> frozenset:
     return frozenset(out)
 
 
+_SKIP_TOPIC = __import__("re").compile(r"(setup|install|environment|conda|repo(sitory)?|git\\b|github|pip\\b|orientation|archetype|schedule|logistics|registration|workspace|ide\\b|jupyter|terminal)", __import__("re").I)
+
+
 def review_worthy(track: str, topic: str) -> bool:
+    if _SKIP_TOPIC.search(topic):
+        return False
     w = _worthy(track)
     return (not w) or topic.lower() in w or topic.lower() not in {k.lower() for secs in _skills_all().values() for m in secs.values() for k in m.get("skills", [])}

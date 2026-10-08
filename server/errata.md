@@ -1,0 +1,5 @@
+CORRECTIONS TO THE LESSON PAGES (these override the lesson text where they conflict):
+- Quant, log returns: a +50% gain followed by a -50% loss is NOT zero in log returns. ln(1.5) + ln(0.5) = ln(0.75), about -0.288. Equal and opposite simple returns (+x% then -x%) never cancel in log space either: +10% then -10% gives a log total of about -0.0101. Log returns add across TIME periods exactly; simple returns do not. Simple returns add across ASSETS in a portfolio (as a weighted average); log returns do not.
+- Quant: the same price path gives the same final price whether you compound its simple returns or sum its log returns; the two methods always agree on the final price.
+- AWS Control Tower: the management account already exists before Control Tower. Control Tower creates the Security OU with the log archive and audit accounts (and the Sandbox OU as an option). Control Tower calls guardrails "controls", in three behaviors: preventive (SCPs), detective (AWS Config rules) and proactive (CloudFormation Hooks); each is also classed as mandatory, strongly recommended or elective.
+- AWS SCPs never apply to the management account, so no SCP can restrict it.
