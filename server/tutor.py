@@ -148,11 +148,80 @@ HW_PROMISE = re.compile(r"\b(I'?ll|I will|I'?ve|I have|let me|I'?m going to|goin
 BOARD_PROMISE = re.compile(r"(look at the board|(see|on|check|at) the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
 
 STOP_SIGNAL = re.compile(r"\b(that'?s (all|it|enough)|i('?m| am) (done|tired|out)|let'?s (stop|wrap|call it)|wrap (it )?up|end (the )?(session|class)|(today|day) (is|has been) (done|complete|over)|i have to go|gotta go|mark (today|it|this) (as )?(complete|done))\b", re.I)
+GRADE_WORDS = re.compile(r"\b(that'?s|that was|it'?s|a|clean|logged as|graded as|call that|counts as)\s+(a\s+)?(clean\s+)?(hit|miss)\b[.,!]?\s*", re.I)
+NAME = re.compile(r",?\s*\bStanley\b(?=[,.!?]|\s)[,.]?", re.I)
 ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
 MAX_SENTENCES = 6
 
 
 class Conversation:
+    def stored_possible(self) -> bool:
+        import progress
+        return any(progress.item_for(self.track, self.day, x["id"]) for x in progress.sections_of(self.track, self.day))
+
+    def _verdict_note(self, verdict) -> str:
+        warm = " This was a warm-up question: if it was a miss, re-teach in two sentences and move on; never open by telling him he missed." if self.turns <= len(self.warm_targets) + 1 else ""
+        return (f"(Grader verdict, already decided, you must not contradict it: {verdict[1].upper()} on '{verdict[0]}'. "
+                + (f"Flaw: {verdict[3]} " if verdict[1] == "miss" and verdict[3] else "")
+                + "Say it in plain words in your first two sentences (never the words hit, miss or graded). On a hit give one specific reason in at most 8 words. "
+                  "Quote his words only if it was a miss; never invent an error he did not make. Do NOT emit a <log> tag." + warm + ")")
+
+    def _l3_due(self) -> bool:
+        import db
+        if self.mode not in ("teach", "review") or self.closing or self.warm_idx < len(self.warm_targets):
+            return False
+        cov = len([x for x in db.covered_sections(self.track, self.day) if x != "__l3__"])
+        return cov - self.l3_cov_mark >= 2 or (self.turns >= 10 and self.l3_asked == 0 and self.item_tries == 0)
+
+    def _start_item(self):
+        """Pick a stored item for a covered section whose skills he has applied at L2; returns the board dict (server owns the item board)."""
+        import db, progress
+        covered = db.covered_sections(self.track, self.day)
+        mm = {m["topic"].lower(): m["level"] for m in db.mastery_map(self.track, 200)}
+        self.item_tries += 1
+        for sec in reversed(progress.sections_of(self.track, self.day)):
+            it = progress.item_for(self.track, self.day, sec["id"])
+            if not it or sec["id"] not in covered or sec["id"] in self.used_items:
+                continue
+            skills = progress.section_meta(self.track, self.day).get(sec["id"], {}).get("skills", [])
+            if skills and max((mm.get(k.lower(), 0) for k in skills), default=0) < 2:
+                self.hint += ("\n\n(System: before any exam-style item, give a FADED WORKED EXAMPLE of '" + skills[0] + "': you do the first half of a tiny case aloud, he finishes it.)")
+                self.l3_cov_mark = len(covered)
+                return None
+            self.used_items.add(sec["id"]); self.l3_cov_mark = len(covered)
+            opts = it.get("options") or {}
+            body = it["stem"].strip() + ("\n\n" + "\n".join(f"- {k}. {v}" for k, v in opts.items()) if opts else "")
+            self.item = {"sid": sec["id"], "it": it, "skill": (skills or [sec["title"]])[0]}
+            self.hint += ("\n\n(System: a practice item is now on his whiteboard (stimulus and options). Do NOT emit a board and do NOT read or restate the item. "
+                          "In at most 2 sentences tell him to read it on the board and give you his pick with a one-line reason. Reveal nothing.)")
+            return {"title": "Practice item", "kind": "points", "body": body}
+        self.l3_cov_mark = len(covered)
+        return None
+
+    def _resolve_item(self, text: str):
+        """Grade an answer to the active stored item in code. Returns (verdict-or-None, note-or-None)."""
+        it, skill = self.item["it"], self.item["skill"]
+        opts = it.get("options") or {}
+        t = text.strip()
+        if re.search(r"\b(skip|pass|no idea|don'?t know|do not know|not sure|give up)\b", t, re.I) and not re.search(r"\b[A-E]\b", t):
+            self.item = None
+            return None, ("(He passed on the practice item. Walk through it in 3 short sentences: reveal the answer " + str(it["answer"]) + " and the reasoning: " + it.get("why", "") + ")")
+        if opts:
+            m = (re.search(r"\b(?:option|answer|choice|pick|go with|it'?s|is|choose)\s+([a-e])\b", t, re.I)
+                 or re.search(r"(?<![A-Za-z'])([A-E])(?![A-Za-z'])", t) or (re.fullmatch(r"\W*([a-eA-E])\W*", t)))
+            if not m:
+                return None, "(He is still working on the practice item on the board. Help him think with a question or a nudge, WITHOUT revealing the answer or traps, and do not start a new item.)"
+            pick = m.group(1).upper(); right = str(it["answer"]).strip().upper()[:1]
+            self.item = None
+            traps = it.get("traps", {})
+            if pick == right:
+                return (skill, "hit", 3, ""), (f"(Item result, decided in code: he chose {pick}, which is CORRECT. Say so in one short sentence with the specific reason: {it.get('why','')} "
+                                               f"Then ask ONE probe: 'why not <a tempting wrong option>?' using these traps: {json.dumps(traps)}. Plain words, never hit or miss.)")
+            return (skill, "miss", 3, f"chose {pick}"), (f"(Item result, decided in code: he chose {pick}, which is WRONG; the correct answer is {right}. The trap he fell into: {traps.get(pick, 'a tempting near miss')}. "
+                                                         f"In two kind sentences explain why {pick} tempts and why {right} is right: {it.get('why','')} Then ask one short easier follow-up about the key constraint. Plain words, never hit or miss.)")
+        self.item = None   # open-answer item (quant): grade with the item key as reference
+        return "OPEN", (it["stem"], f"Correct answer: {it['answer']}. Why: {it.get('why','')} Common wrong answers and traps: {json.dumps(it.get('traps', {}))}")
+
     def _pressure_hint(self) -> str:
         """Server-driven nudges so exam-tier items and real application questions actually happen."""
         import db
@@ -162,24 +231,15 @@ class Conversation:
             return out
         if self.warm_idx < len(self.warm_targets):
             t = self.warm_targets[self.warm_idx]; self.warm_idx += 1
-            return out + (f"\n\n(System: WARM-UP. Before any new material, ask ONE quick retrieval question on his earlier skill '{t['topic']}' at rung L{min(4, t['level'] + 1)}"
+            return out + (f"\n\n(System: WARM-UP. Before any new material, ask ONE quick retrieval question on his earlier skill '{t['topic']}' at rung L{max(2, min(4, t['level'] + 1))}"
                           f"{' (he missed it last time, so keep it gentle)' if t['last_result'] == 'miss' else ''}. Do not teach new material this turn.)")
         cov = len([x for x in db.covered_sections(self.track, self.day) if x != "__l3__"])
-        if self.mode in ("teach", "review") and (cov - self.l3_cov_mark >= 2 or (self.turns >= 10 and self.l3_asked == 0)):
+        if self.mode in ("teach", "review") and (cov - self.l3_cov_mark >= 2 or (self.turns >= 10 and self.l3_asked == 0)) and not self.item and not self.stored_possible():
             import progress
             bank = prompts.content.load_day(self.track, self.day)
             qs = (bank or {}).get("questions") or []
-            stored = None
-            for sec in reversed(progress.sections_of(self.track, self.day)):
-                it = progress.item_for(self.track, self.day, sec["id"])
-                if it and sec["id"] in db.covered_sections(self.track, self.day) and sec["id"] not in self.used_items:
-                    stored = (sec["id"], it); break
-            if stored:
-                sid, it = stored; self.used_items.add(sid)
-                opts = " | ".join(f"{k}. {v}" for k, v in (it.get("options") or {}).items())
-                out += ("\n\n(System: it is time for ONE exam-tier (L3) item. Use THIS pre-written item. Speak only the stem, in your own words, and say the options are on the board; "
-                        "emit the options with <board title=\"Options\" kind=\"points\">- A. ...\\n- B. ...</board>. Do not reveal the answer or traps until he commits; then give the verdict and probe 'why not <a tempting option>?' using the traps.\n"
-                        f"STEM: {it['stem']}\nOPTIONS: {opts or '(open answer)'}\nANSWER: {it['answer']}\nWHY: {it.get('why','')}\nTRAPS: {json.dumps(it.get('traps', {}))})")
+            if False:
+                pass
             elif qs and self.bank_idx < len(qs):
                 out += (f"\n\n(System: it is time for ONE exam-tier (L3) item. Use Q{self.bank_idx + 1} from today's question bank: paraphrase the stem, read options A to D briefly, "
                         "and do not explain until he commits to an answer. Log it with level=\"3\".)")
@@ -235,10 +295,14 @@ class Conversation:
         self.used_note = False
         self.verdict_note = ""
         self.used_items = set()
+        self.item = None
+        self.name_turn = -10
+        self.item_tries = 0
         self.closing = False
         self.warm_idx = 0
         import db
-        self.warm_targets = db.due_topics(track, 2) if mode in ("teach", "review") else []
+        import progress
+        self.warm_targets = [t for t in db.due_topics(track, 12) if progress.review_worthy(track, t["topic"])][:2] if mode in ("teach", "review") else []
         self.l3_cov_mark = 0     # covered-section count at the last exam-tier item
         self.l3_asked = 0
         self.since_graded = 0
@@ -283,7 +347,7 @@ class Conversation:
             first_due = ""
             if self.warm_targets:
                 t = self.warm_targets[0]; self.warm_idx = 1
-                first_due = f" Your very first question after the greeting is a warm-up retrieval on his earlier skill '{t['topic']}' (rung L{min(4, t['level'] + 1)}); do not start new material yet."
+                first_due = f" Your very first question after the greeting is a warm-up retrieval on his earlier skill '{t['topic']}' (rung L{max(2, min(4, t['level'] + 1))}); do not start new material yet."
             user_text = "(Stanley just opened the app and is ready. Begin the session now, following the session shape. " + self._last_session_fact() + first_due + ")"
         elif user_text is not None and not user_text.startswith("("):
             if STOP_SIGNAL.search(user_text):
@@ -299,16 +363,35 @@ class Conversation:
         cover_task = None
         prev = next((m["content"] for m in reversed(self.messages) if m["role"] == "assistant"), "")
         verdict = None
-        if (user_text and not opener and not user_text.startswith("(") and prev.rstrip().endswith("?")
+        item_board = None
+        real_answer = user_text and not opener and not user_text.startswith("(")
+        if real_answer and self.item:
+            verdict, item_note = self._resolve_item(user_text)
+            if verdict == "OPEN":
+                import db, progress as _pg
+                known = _pg.skills_for_day(self.track, self.day) + [m["topic"] for m in db.mastery_map(self.track, 40)]
+                verdict = await grade_answer(item_note[0], user_text, content_title(self.track, self.day), known, item_note[1])
+                item_note = None
+                if verdict and verdict[1] != "unsure":
+                    verdict = (verdict[0], verdict[1], 3, verdict[3]); self.verdict_note = self._verdict_note(verdict)
+                else:
+                    verdict = None; self.verdict_note = "(Grader could not settle the answer to the practice item. Ask ONE short probing follow-up; do not rule yet.)"
+            elif item_note:
+                self.verdict_note = item_note
+        elif (real_answer and prev.rstrip().endswith("?")
                 and not ASSENT.match(user_text.strip()) and not user_text.strip().endswith("?") and not OFFER.search(prev[-160:])):
             import db, progress as _pg
             known = _pg.skills_for_day(self.track, self.day) + [m["topic"] for m in db.mastery_map(self.track, 40)]
-            verdict = await grade_answer(prev, user_text, content_title(self.track, self.day), known)
-            if verdict:
-                self.verdict_note = (f"(Grader verdict, already decided, you must not contradict it: {verdict[1].upper()} on '{verdict[0]}'. "
-                                     + (f"Flaw: {verdict[3]} " if verdict[1] == "miss" and verdict[3] else "")
-                                     + "Speak this verdict in your first two sentences, quoting or referring to what he actually said. "
-                                       "A correction must refer to his real words; never invent an error he did not make. Do NOT emit a <log> tag.)")
+            lesson_ref = prompts.content.lesson_text(self.track, self.day)
+            verdict = await grade_answer(prev, user_text, content_title(self.track, self.day), known, lesson_ref)
+            if verdict and verdict[1] == "unsure":
+                self.verdict_note = ("(Grader could not settle this answer. Do not rule hit or miss. Ask ONE short probing follow-up that lets him show or fix his reasoning, "
+                                     "and do not tell him he is wrong yet.)")
+                verdict = None
+            elif verdict:
+                self.verdict_note = self._verdict_note(verdict)
+        if real_answer and not self.item and self._l3_due():
+            item_board = self._start_item()
         self.turns += 1
         if not opener and self.turns % 3 == 0 and self.turns >= 3:
             left = progress.remaining(self.track, self.day)
@@ -331,6 +414,11 @@ class Conversation:
                     yield ("speech", ev[1])
                     for s in splitter.feed(ev[1]):
                         s = re.sub(r"[*_`#]+", "", s).replace("\u2014", ", ").replace("\u2013", ", ").strip()
+                        s = GRADE_WORDS.sub("", s).strip()
+                        if self.turns - self.name_turn < 5:
+                            s = NAME.sub("", s).strip()
+                        elif NAME.search(s):
+                            self.name_turn = self.turns
                         if s and not MACHINERY.search(s):
                             spoken.append(s)
                             yield ("sentence", s)
@@ -346,6 +434,9 @@ class Conversation:
                     self.l3_asked += 1
                     yield ("covered", "__l3__")
                 yield ("log", verdict[0], verdict[1], verdict[2])
+            if item_board:
+                yield ("board", item_board)
+                emitted["board"] = True
             async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=60.0)) as client:
                 async with client.stream("POST", API_URL, headers=headers, json=self._payload(user_text)) as r:
                     if r.status_code != 200:
@@ -445,19 +536,21 @@ def cap_level(question: str, lvl: int) -> int:
     return lvl
 
 
-async def grade_answer(question: str, answer: str, lesson_title: str, topics: list[str]):
+async def grade_answer(question: str, answer: str, lesson_title: str, topics: list[str], reference: str = ""):
     """Strict independent grade of the student's reply to the mentor's last question. Returns (topic, result, level) or None."""
     known = "; ".join(topics[:40]) or "(none yet)"
     sysmsg = ("You grade a beginner's spoken answer (speech-to-text, so ignore small word errors) to a tutor's question. "
-              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"...\", \"result\": \"hit\"|\"miss\", \"level\": 1-4, \"flaw\": \"if miss: the exact words from the student's answer that were wrong or missing, quoted, plus the correct fact in one sentence; else empty\"}. "
+              "Reply ONLY JSON: {\"gradable\": true|false, \"topic\": \"...\", \"result\": \"hit\"|\"miss\"|\"unsure\", \"level\": 1-4, \"flaw\": \"if miss: the exact words from the student's answer that were wrong or missing, quoted, plus the correct fact in one sentence; else empty\"}. "
               "gradable=false if the tutor's turn was an offer or check-in rather than a question needing knowledge or reasoning, if the student asked a question back, "
               "or if the reply is just okay/sure/I don't know. "
               "topic: choose EXACTLY one name from the known topics if it fits, otherwise a new 2-4 word name. "
               "level is the difficulty of the QUESTION: 1 recall/recognise, 2 apply to a new small case, 3 exam-style scenario with distractors, 4 professional transfer or design trade-off. "
               "If the stated verdict (yes/no, which option) contradicts the student's own stated reasoning, it is a miss. Be strict but fair: hit only if every key part of the answer is correct and the reasoning is not reversed; a clearly correct paraphrase is a hit; partial or reversed is miss. "
-              f"Lesson context: {lesson_title}. Known topics: {known}")
+              f"Lesson context: {lesson_title}. Known topics: {known}" + (f"\nREFERENCE (ground truth; trust it over your own recall): {reference[:9000]}" if reference else ""))
     j = _json(await _quick(sysmsg, f"TUTOR TURN: {question[-700:]}\nSTUDENT ANSWER: {answer}"))
-    if j and j.get("gradable") and j.get("topic") and j.get("result") in ("hit", "miss"):
+    if j and j.get("gradable") and j.get("topic") and j.get("result") in ("hit", "miss", "unsure"):
+        if j["result"] == "miss" and len(str(j.get("flaw") or "")) < 12:
+            j["result"] = "unsure"
         topic = str(j["topic"]).strip()
         for k in topics:
             if k.lower() == topic.lower():

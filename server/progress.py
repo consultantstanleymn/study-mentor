@@ -82,3 +82,24 @@ def _items_all() -> dict:
 
 def item_for(track: str, day: int, section_id: str) -> dict | None:
     return _items_all().get(f"{track}:{day}:{section_id}")
+
+
+_SKIP_SECTION = __import__("re").compile(r"(setup|welcome|orientation|how this plan|archetype|environment|install|logistics|admin)", __import__("re").I)
+
+
+@lru_cache(maxsize=8)
+def _worthy(track: str) -> frozenset:
+    """Lower-cased skills from teach sections that are real exam content (never setup, orientation or plan logistics)."""
+    out = set()
+    for key, secs in _skills_all().items():
+        if not key.startswith(track + ":"):
+            continue
+        for sid, m in secs.items():
+            if m.get("kind") == "teach" and not _SKIP_SECTION.search(sid):
+                out.update(k.lower() for k in m.get("skills", []))
+    return frozenset(out)
+
+
+def review_worthy(track: str, topic: str) -> bool:
+    w = _worthy(track)
+    return (not w) or topic.lower() in w or topic.lower() not in {k.lower() for secs in _skills_all().values() for m in secs.values() for k in m.get("skills", [])}

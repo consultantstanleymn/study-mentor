@@ -43,6 +43,7 @@ async def chat(messages, max_tokens, temperature, key):
 
 async def mentor_turn(conv, text, opener=False):
     speech, tags = [], []
+    boards = []
     async for ev in conv.respond(text, opener=opener):
         k = ev[0]
         if k == "sentence": speech.append(ev[1])
@@ -51,7 +52,7 @@ async def mentor_turn(conv, text, opener=False):
             sec = ev[1]; d, sid = (sec.split(":", 1) if sec[:1] == "d" and ":" in sec else (str(conv.day), sec))
             db.mark_covered(conv.track, int(d.lstrip("d")), sid); tags.append(f"covered:{sec}")
         elif k == "todo": db.add_todo(conv.track, conv.day, ev[1], ev[2]); tags.append(f"TODO:{ev[1]} || {ev[2][:160]}")
-        elif k == "board": tags.append(f"board:{ev[1]['kind']}:{ev[1]['title']}")
+        elif k == "board": tags.append(f"board:{ev[1]['kind']}:{ev[1]['title']}"); boards.append(ev[1]["body"][:900])
         elif k == "day_done":
             refusal = conv.day_done_refusal()
             if refusal:
@@ -59,7 +60,7 @@ async def mentor_turn(conv, text, opener=False):
             else: db.mark_day(conv.track, conv.day, "done"); tags.append("day_done:OK")
         elif k == "note": db.add_note(conv.track, conv.day, ev[1]); tags.append("note")
         elif k == "error": tags.append("ERROR:" + ev[1])
-    return " ".join(speech), tags
+    return " ".join(speech) + "".join(f"  [On the whiteboard: {b}]" for b in boards), tags
 
 
 async def run(track, day, persona, turns, mode, rng, key):
