@@ -132,8 +132,9 @@ def skills_block(track: str, day: int) -> str:
 
 
 def mastery_block(track: str) -> str:
-    due = db.due_topics(track)
-    mm = db.mastery_map(track, 25)
+    import progress
+    due = [d for d in db.due_topics(track, 12) if progress.review_worthy(track, d["topic"])][:4]
+    mm = [m for m in db.mastery_map(track, 40) if progress.review_worthy(track, m["topic"])][:25]
     r = db.readiness(track)
     out = ["=== MASTERY (his actual standing; spaced review is scheduled for you) ==="]
     if not mm:

@@ -208,7 +208,8 @@ HW_PROMISE = re.compile(r"\b(your homework (is|for)|homework for (today|tonight)
 BOARD_PROMISE = re.compile(r"(look at the board|(see|on|check|at) the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
 
 STOP_SIGNAL = re.compile(r"\b(that'?s (all|it|enough)|i('?m| am) (done|tired|out)|let'?s (stop|wrap|call it)|wrap (it )?up|end (the )?(session|class)|(today|day) (is|has been) (done|complete|over)|i have to go|gotta go|mark (today|it|this) (as )?(complete|done))\b", re.I)
-GRADE_SWAPS = [(re.compile(r"\b(that'?s|that was|it'?s|this is) a (clean |solid )?hit\b", re.I), "that's right"),
+GRADE_SWAPS = [(re.compile(r"\b(clean|solid|good|nice) (hit|miss)\b[.!]?", re.I), "Good."),
+               (re.compile(r"\b(that'?s|that was|it'?s|this is) a (clean |solid )?hit\b", re.I), "that's right"),
                (re.compile(r"\b(that'?s|that was|it'?s|this is) a (clean )?miss\b", re.I), "that's not quite it"),
                (re.compile(r"\b(a )?(clean |solid )?hit\b(?= on| for)", re.I), "right"), (re.compile(r"\b(logged|graded) (as )?(a )?(hit|miss)\b", re.I), "noted")]
 GRADE_WORDS = re.compile(r"\b(that'?s|that was|it'?s|a|clean|logged as|graded as|call that|counts as)\s+(a\s+)?(clean\s+)?(hit|miss)\b[.,!]?\s*", re.I)
@@ -224,6 +225,14 @@ ERRATA_TRAPS = [
      "You said the caller's SCPs apply, not the target's. Correct: an SCP constrains the principals of the account it applies to; an assumed role is a principal of the role's account, so the target account's SCPs apply to it."),
     (re.compile(r"\b(30|thirty)[- ]plus (question )?types\b", re.I),
      "Do not state a count of LSAT question types; just name the types you are teaching."),
+]
+STUDENT_TRAPS = [
+    (re.compile(r"(creates?|provisions?|sets? up)[^.]{0,50}management account|three accounts", re.I),
+     "He stated that Control Tower creates the management account or three accounts. Correct it kindly: the management account already exists; Control Tower creates the log archive and audit accounts."),
+    (re.compile(r"two (kinds|types|flavou?rs) of (controls?|guardrails?)", re.I),
+     "He said controls come in two kinds. Correct it: preventive, detective and proactive."),
+    (re.compile(r"(scps?|service control polic\w+)[^.]{0,60}(restrict|limit|apply to|affect)[^.]{0,30}management account", re.I),
+     "SCPs never apply to the management account; correct him if he said they do."),
 ]
 PURE_Q_SO = re.compile(r"^so (if|would|does|is|do|are|should|could|can)\b[^.]{0,200}\?$", re.I)
 ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
@@ -321,7 +330,7 @@ class Conversation:
             self.used_items.add(sec["id"]); self.l3_cov_mark = len(covered)
             opts = it.get("options") or {}
             body = it["stem"].strip() + ("\n\n" + "\n".join(f"- {k}. {v}" for k, v in opts.items()) if opts else "")
-            self.item = {"sid": sec["id"], "it": it, "skill": (skills or [sec["title"]])[0]}
+            self.item = {"sid": sec["id"], "it": it, "skill": it.get("skill") or (skills or [sec["title"]])[0]}
             self.hint += ("\n\n(System: a practice item is now on his whiteboard (stimulus and options). Do NOT emit a board and do NOT read or restate the item. "
                           "Your ENTIRE reply: at most one short sentence reacting to his last answer, then the lead-in telling him to read it on the board and give his pick with a one-line reason. Ask no other question. Reveal nothing.)")
             return {"title": "Practice item", "kind": "points", "body": body}
@@ -529,6 +538,7 @@ class Conversation:
         parser, splitter = TagParser(), SentenceSplitter()
         spoken: list[str] = []
         truncated = False
+        capped_by_us = False
         import progress
         cover_task = None
         prev = next((m["content"] for m in reversed(self.messages) if m["role"] == "assistant"), "")
@@ -569,6 +579,10 @@ class Conversation:
                 verdict = None
             elif verdict:
                 self.verdict_note = self._verdict_note(verdict)
+        if real_answer:
+            for rx, fix in STUDENT_TRAPS:
+                if rx.search(user_text):
+                    self.verdict_note = (self.verdict_note + " " if self.verdict_note else "") + "(Fact check on his words: " + fix + ")"
         if real_answer and not self.item and self._l3_due():
             item_board = self._start_item()
         self.turns += 1
@@ -662,9 +676,10 @@ class Conversation:
                         if delta:
                             for ev in handle(parser.feed(delta)):
                                 yield ev
-                        cap = 5 if opener else MAX_SENTENCES
+                        cap = 5 if opener else (2 if item_board else MAX_SENTENCES)
                         if len(spoken) >= cap and (spoken[-1].endswith("?") or len(spoken) >= cap + 1) and not (spoken[-1].count('"') % 2 == 1 and len(spoken) < cap + 4):
-                            truncated = not spoken[-1].endswith("?")
+                            truncated = True
+                            capped_by_us = spoken[-1].endswith("?")
                             break
             for ev in handle(parser.flush()):
                 yield ev
@@ -673,10 +688,13 @@ class Conversation:
                 if s:
                     spoken.append(s)
                     yield ("sentence", s)
-            if (truncated or (spoken and not spoken[-1].rstrip().endswith("?"))) and spoken and not opener and not self.closing and not self.item and answer_expected(user_text):
+            if (truncated and not capped_by_us or (spoken and not spoken[-1].rstrip().endswith("?"))) and spoken and not opener and not self.closing and not self.item and answer_expected(user_text):
                 q = (await _quick("Write ONE short spoken question (max 22 words) that the tutor would naturally ask next so the student applies the idea just explained. Plain words, no preamble. Output only the question.",
                                   " ".join(spoken)[-900:], 60)).strip()
                 if q.endswith("?") and len(q.split()) <= 30:
+                    lastw = re.findall(r"[A-Za-z']+", spoken[-1])[-1:] 
+                    if lastw and q.split()[0].strip(",.?").lower() == lastw[0].lower():
+                        q = " ".join(q.split()[1:]).capitalize() if len(q.split()) > 3 else q
                     spoken.append(q); yield ("sentence", q)
             if not spoken:
                 fb = "Good work today, see you next time." if self.closing else "Go ahead, I'm listening. What's your take?"
@@ -715,9 +733,14 @@ async def debrief(track: str, day: int, messages: list[dict]) -> str:
            "Start next time with: <one concrete thing>.' Plain text, under 90 words, only what actually happened.")
     body = {"model": MODEL, "messages": [{"role": "system", "content": ask}, {"role": "user", "content": convo}],
             "thinking": {"type": "disabled"}, "temperature": 0.2, "max_tokens": 220}
-    async with httpx.AsyncClient(timeout=40) as client:
-        r = await client.post(API_URL, headers={"Authorization": f"Bearer {api_key()}"}, json=body)
-        return r.json()["choices"][0]["message"]["content"].strip()
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=40) as client:
+                r = await client.post(API_URL, headers={"Authorization": f"Bearer {api_key()}"}, json=body)
+                return r.json()["choices"][0]["message"]["content"].strip()
+        except (httpx.HTTPError, KeyError, ValueError):
+            await asyncio.sleep(2)
+    return ""
 
 
 async def _quick(system: str, user: str, max_tokens: int = 160, think: bool = False) -> str:
