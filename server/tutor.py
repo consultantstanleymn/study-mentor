@@ -23,7 +23,7 @@ def api_key() -> str:
 class TagParser:
     """Splits a token stream into speech text and hidden tags (board, log, day_done, note)."""
 
-    PAIRED = ("board", "note")
+    PAIRED = ("board", "note", "todo")
     SELF = ("log", "day_done", "focus", "layout", "covered")
 
     def __init__(self):
@@ -46,7 +46,7 @@ class TagParser:
             if i > 0:
                 yield ("speech", self.buf[:i])
                 self.buf = self.buf[i:]
-            m = re.match(r"<(board|note|log|day_done|focus|layout|covered)\b", self.buf)
+            m = re.match(r"<(board|note|todo|log|day_done|focus|layout|covered)\b", self.buf)
             if not m:
                 # could still be a partial tag name like "<boa"
                 if not final and any(t.startswith(self.buf[1:]) for t in self.PAIRED + self.SELF) and len(self.buf) < 12:
@@ -88,6 +88,8 @@ class TagParser:
                 body = body.replace("\\n", "\n").strip()
                 if name == "board":
                     yield ("board", {"title": attrs.get("title", ""), "kind": attrs.get("kind", "points"), "body": body})
+                elif name == "todo":
+                    yield ("todo", attrs.get("title", ""), body)
                 else:
                     yield ("note", body)
 

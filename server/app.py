@@ -65,6 +65,17 @@ async def coverage(track: str, day: int):
     return {"left_today": [x["title"] for x in progress.remaining(track, day)], "carried": items, "carried_total": total}
 
 
+@app.get("/api/todos")
+async def todos():
+    return db.list_todos()
+
+
+@app.post("/api/todos/{todo_id}")
+async def todo_set(todo_id: int, body: dict):
+    db.set_todo_done(todo_id, bool(body.get("done", True)))
+    return {"ok": True}
+
+
 @app.get("/api/resume/{track}/{day}")
 async def resume_info(track: str, day: int):
     data = _load_convo(track, day)
@@ -202,6 +213,9 @@ async def ws(sock: WebSocket):
                 elif kind == "log":
                     db.log_topic(conv.track, ev[1], ev[2])
                     await send({"type": "log", "turn": my_turn, "topic": ev[1], "result": ev[2]})
+                elif kind == "todo":
+                    if db.add_todo(conv.track, conv.day, ev[1], ev[2]):
+                        await send({"type": "todo", "turn": my_turn, "title": ev[1]})
                 elif kind == "covered":
                     sec = ev[1]
                     d, _, sid = sec.partition(":") if sec[:1] == "d" and ":" in sec else (str(conv.day), "", sec)

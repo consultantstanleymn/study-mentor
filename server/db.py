@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT, track TEXT, day INTEGER, note TEXT, created REAL);
 CREATE TABLE IF NOT EXISTS coverage (
   track TEXT, day INTEGER, section TEXT, created REAL, PRIMARY KEY (track, day, section));
+CREATE TABLE IF NOT EXISTS todos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, track TEXT, day INTEGER, title TEXT, detail TEXT,
+  done INTEGER DEFAULT 0, created REAL, done_at REAL);
 CREATE TABLE IF NOT EXISTS sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, track TEXT, day INTEGER, mode TEXT, started REAL, ended REAL);
 """
@@ -159,3 +162,32 @@ def day_status(track: str, day: int) -> str | None:
     with conn() as c:
         r = c.execute("SELECT status FROM day_progress WHERE track=? AND day=?", (track, day)).fetchone()
     return r["status"] if r else None
+
+
+def add_todo(track: str, day: int, title: str, detail: str) -> int | None:
+    title = title.strip()[:140]
+    if not title:
+        return None
+    with conn() as c:
+        dup = c.execute("SELECT id FROM todos WHERE track=? AND done=0 AND lower(title)=lower(?)", (track, title)).fetchone()
+        if dup:
+            return None
+        return c.execute("INSERT INTO todos(track,day,title,detail,created) VALUES(?,?,?,?,?)",
+                         (track, day, title, detail.strip()[:3000], time.time())).lastrowid
+
+
+def list_todos(include_done: bool = True, done_limit: int = 15) -> dict:
+    with conn() as c:
+        open_ = [dict(r) for r in c.execute("SELECT * FROM todos WHERE done=0 ORDER BY created ASC, id ASC")]
+        done = [dict(r) for r in c.execute("SELECT * FROM todos WHERE done=1 ORDER BY done_at DESC LIMIT ?", (done_limit,))] if include_done else []
+    return {"open": open_, "done": done}
+
+
+def set_todo_done(todo_id: int, done: bool):
+    with conn() as c:
+        c.execute("UPDATE todos SET done=?, done_at=? WHERE id=?", (1 if done else 0, time.time() if done else None, todo_id))
+
+
+def open_todos(track: str) -> list[dict]:
+    with conn() as c:
+        return [dict(r) for r in c.execute("SELECT title, day FROM todos WHERE track=? AND done=0 ORDER BY created", (track,))]

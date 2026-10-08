@@ -50,8 +50,21 @@
     el.speedRng.value = S.speed; el.speedOut.textContent = S.speed.toFixed(2).replace(/0$/, "") + "x";
     if (!keepTrack || !S.track || !S.tracks.find((t) => t.id === S.track)) S.track = localStorage.getItem("mentor.track") || (S.tracks[0] && S.tracks[0].id);
     if (!S.tracks.find((t) => t.id === S.track) && S.tracks[0]) S.track = S.tracks[0].id;
-    renderTracks(); renderSide();
+    renderTracks(); renderSide(); loadTodos();
   }
+  const TRACK_LABEL = { aws: "AWS", lsat: "LSAT", quant: "Quant" };
+  async function loadTodos() {
+    let d; try { d = await api("/api/todos"); } catch (e) { return; }
+    const item = (t, done) => `<li class="${done ? "is-done" : ""}"><label class="todo-row"><input type="checkbox" data-id="${t.id}" ${done ? "checked" : ""}><span class="todo-title">${esc(t.title)}</span><em>${esc(TRACK_LABEL[t.track] || t.track)}${t.track === "quant" ? " wk " : " day "}${t.day}</em></label>`
+      + (t.detail ? `<details class="todo-detail"><summary>Instructions</summary><div>${esc(t.detail).replace(/\\n|\n/g, "<br>")}</div></details>` : "") + "</li>";
+    $("todoList").innerHTML = d.open.length ? d.open.map((t) => item(t, false)).join("") : `<li class="empty">No homework right now. The mentor adds it here and it stays until you check it off.</li>`;
+    $("todoCount").textContent = d.open.length ? d.open.length : "";
+    $("todoDone").hidden = !d.done.length; $("todoDoneList").innerHTML = d.done.map((t) => item(t, true)).join("");
+  }
+  $("todoCard").addEventListener("change", async (e) => {
+    const cb = e.target.closest("input[data-id]"); if (!cb) return;
+    await jpost(`/api/todos/${cb.dataset.id}`, { done: cb.checked }); loadTodos();
+  });
   function renderTracks() {
     el.trackSeg.innerHTML = S.tracks.map((t) => `<button role="tab" aria-selected="${t.id === S.track}" data-track="${t.id}">${esc(t.name)}</button>`).join("");
   }
@@ -137,6 +150,7 @@
       case "focus": S.queue.push({ kind: "focus", nodes: ev.nodes }); pump(); break;
       case "layout": S.queue.push({ kind: "layout", board: ev.board }); pump(); break;
       case "log": refreshSoon(); break;
+      case "todo": toast("Added to your to-do list: " + ev.title, 4500); loadTodos(); break;
       case "day_blocked": toast("Not everything is covered yet. The rest carries to tomorrow.", 4500); break;
       case "day_done": S.queue.push({ kind: "daydone", day: ev.day }); pump(); break;
       case "error": addTurn("err", "Mentor", ev.message); setState("idle", "Something went wrong"); toast(ev.message, 6000); break;

@@ -442,3 +442,19 @@ input[type=range] { accent-color: var(--primary); min-height: 32px; }
 #gloss .gloss-r span { color: var(--text-2); }
 .resume-btn { align-self: center; margin: 0 auto 10px; border-radius: 999px; padding: 0 20px; min-height: 40px; color: var(--primary); border-color: rgba(143, 160, 245, .5); font-weight: 600; }
 .resume-btn[hidden] { display: none; }
+
+/* to-do list: oldest at the top, stays until checked off */
+.todo-count { margin-left: 6px; padding: 1px 8px; border-radius: 999px; background: var(--primary); color: var(--primary-ink); font-size: 11px; font-weight: 700; }
+.todo-count:empty { display: none; }
+.todos { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.todos li { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; font-size: 14px; color: var(--text-2); }
+.todos .empty { background: transparent; padding: 4px 0; color: var(--muted); }
+.todo-row { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; align-items: start; cursor: pointer; }
+.todo-row input { margin-top: 3px; accent-color: var(--primary); width: 16px; height: 16px; }
+.todo-row .todo-title { color: var(--text); font-weight: 500; }
+.todo-row em { grid-column: 2; font-style: normal; font-size: 12px; color: var(--muted); }
+.todo-detail { margin: 8px 0 0 26px; }
+.todo-detail summary { cursor: pointer; color: var(--primary); font-size: 13px; }
+.todo-detail div { margin-top: 6px; font-size: 13px; line-height: 1.55; color: var(--text-2); }
+.todos li.is-done .todo-title { text-decoration: line-through; color: var(--muted); }
+.todo-done { margin-top: 10px; } .todo-done summary { cursor: pointer; color: var(--muted); font-size: 13px; }
