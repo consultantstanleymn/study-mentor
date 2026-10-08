@@ -88,7 +88,9 @@ def _mastery_update(c, track: str, topic: str, result: str, asked_level: int):
     level, hits, misses = (row["level"], row["hits"], row["misses"]) if row else (0, 0, 0)
     now = time.time()
     asked_level = max(1, min(4, asked_level or max(1, level)))
-    if result == "hit":
+    if result == "partial":
+        due = now + 1 * 86400
+    elif result == "hit":
         level, hits = max(level, asked_level), hits + 1
         due = now + INTERVAL_DAYS[level] * 86400
     else:
@@ -128,12 +130,15 @@ def log_topic(track: str, topic: str, result: str, level: int = 0):
         return
     col = "misses" if result == "miss" else "hits"
     with conn() as c:
+        if result == "partial":
+            _mastery_update(c, track, topic, "partial", level)
+            return
         c.execute(
             f"INSERT INTO weak(track,topic,{col},last_seen) VALUES(?,?,1,?) "
             f"ON CONFLICT(track,topic) DO UPDATE SET {col}={col}+1, last_seen=excluded.last_seen",
             (track, topic, time.time()),
         )
-        _mastery_update(c, track, topic, "miss" if result == "miss" else "hit", level)
+        _mastery_update(c, track, topic, result if result in ("partial", "miss") else "hit", level)
 
 
 def weak_topics(track: str, limit: int = 6) -> list[dict]:

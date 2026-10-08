@@ -183,8 +183,8 @@ def content_title(track: str, day: int) -> str:
 
 OFFER = re.compile(r"(want (me )?to|want an|ready\?|shall we|should (we|i)|make sense|sound (good|doable|fair)|does that (connect|land|help)|any questions|better\?|clear\?)", re.I)
 PRAISE = re.compile(r"^(exactly|perfect|precisely|that'?s (exactly )?right|correct|yes[,.!]|great|spot on|right[,.!])", re.I)
-MACHINERY = re.compile(r"\b(mark(ing|ed)?|log(ging|ged)?|record(ing|ed)?|sav(e|ing|ed))\b[^.?!]{0,40}\b(cover(ed)?|section|that|this|answer|correct(ly)?|progress|miss|hit)\b|\bI('ve| have) covered\b|\bsection[^.?!]{0,30}\bcovered\b", re.I)
-HW_PROMISE = re.compile(r"\b(I'?ll|I will|I'?ve|I have|let me|I'?m going to|going to)\b[^.?!]{0,40}\b(add|put|added|assign|assigned|give|save|drop)\b[^.?!]{0,50}\b(list|to-?do|homework|assignment)", re.I)
+MACHINERY = re.compile(r"\b(mark(ing|ed)?|log(ging|ged)?|record(ing|ed)?|sav(e|ing|ed))\b[^.?!]{0,40}\b(cover(ed)?|section|that|this|answer|correct(ly)?|progress|miss|hit|complete|done|day|today)\b|\bI('ve| have) covered\b|\bsection[^.?!]{0,30}\bcovered\b", re.I)
+HW_PROMISE = re.compile(r"\b(your homework (is|for)|homework for (today|tonight)|for homework|your assignment (is|for)|I'?ll|I will|I'?ve|I have|let me|I'?m going to|going to)\b[^.?!]{0,40}\b(add|put|added|assign|assigned|give|save|drop)\b[^.?!]{0,50}\b(list|to-?do|homework|assignment)", re.I)
 BOARD_PROMISE = re.compile(r"(look at the board|(see|on|check|at) the board|let me draw|i'?ll draw|i'?ll sketch|here'?s the (comparison|diagram|table)|the board shows)", re.I)
 
 STOP_SIGNAL = re.compile(r"\b(that'?s (all|it|enough)|i('?m| am) (done|tired|out)|let'?s (stop|wrap|call it)|wrap (it )?up|end (the )?(session|class)|(today|day) (is|has been) (done|complete|over)|i have to go|gotta go|mark (today|it|this) (as )?(complete|done))\b", re.I)
@@ -193,6 +193,8 @@ GRADE_SWAPS = [(re.compile(r"\b(that'?s|that was|it'?s|this is) a (clean |solid 
                (re.compile(r"\b(a )?(clean |solid )?hit\b(?= on| for)", re.I), "right"), (re.compile(r"\b(logged|graded) (as )?(a )?(hit|miss)\b", re.I), "noted")]
 GRADE_WORDS = re.compile(r"\b(that'?s|that was|it'?s|a|clean|logged as|graded as|call that|counts as)\s+(a\s+)?(clean\s+)?(hit|miss)\b[.,!]?\s*", re.I)
 NAME = re.compile(r",?\s*\bStanley\b(?=[,.!?]|\s)[,.]?", re.I)
+PURE_Q = re.compile(r"^(so )?(what|why|how|can|could|does|do|is|are|should|would|when|where|which|who)\b[^.]{0,120}\?$", re.I)
+COMPREHENSION = re.compile(r"(make sense|does that (land|click|connect|help)|sound (good|right|fair)|got it\?|clear so far|follow(ing)? so far|ok(ay)?\?$)", re.I)
 ASSENT = re.compile(r"^(ok(ay)?|sure|yes|yeah|yep|yup|right|got it|go on|continue|sounds good|makes sense|alright|uh[- ]huh|mm+ ?h?m*)[\s.,!]*(sir|mark)?[\s.,!]*$", re.I)
 MAX_SENTENCES = 6
 
@@ -208,6 +210,30 @@ class Conversation:
                 + (f"Flaw: {verdict[3]} " if verdict[1] == "miss" and verdict[3] else "")
                 + "Say it in plain words in your first two sentences (never the words hit, miss or graded). On a hit give one specific reason in at most 8 words. "
                   "Quote his words only if it was a miss; never invent an error he did not make. Do NOT emit a <log> tag." + warm + ")")
+
+    def _record(self, topic: str, result: str, level: int):
+        """Update session counters for one graded answer; yields covered events (hit-backed, at most one section per turn)."""
+        self.since_graded = 0
+        self.graded_total += 1
+        self.recent.append(result)
+        self.recent = self.recent[-3:]
+        if result == "hit":
+            self.hits += 1
+            self.hit_skills.add(topic.lower())
+        self.skill_streak = (topic, (self.skill_streak[1] + 1) if (self.skill_streak[0] == topic and result == "hit") else (1 if result == "hit" else 0))
+        self.graded_skills.add(topic.lower())
+        if level >= 3:
+            self.l3_asked += 1
+            yield ("covered", "__l3__")
+        if result == "hit" and level >= 2 or result == "hit" and self.mode != "teach":
+            import progress as _pr
+            meta = _pr.section_meta(self.track, self.day)
+            done_now = prompts.db.covered_sections(self.track, self.day)
+            for sec in _pr.sections_of(self.track, self.day):
+                sk = [x.lower() for x in meta.get(sec["id"], {}).get("skills", [])]
+                if sk and sec["id"] not in done_now and meta[sec["id"]].get("kind") == "teach" and sum(1 for x in sk if x in self.hit_skills) / len(sk) >= 0.6:
+                    yield ("covered", sec["id"])
+                    break
 
     def _l3_due(self) -> bool:
         import db
@@ -230,9 +256,10 @@ class Conversation:
                 continue  # malformed MCQ: options missing
             skills = progress.section_meta(self.track, self.day).get(sec["id"], {}).get("skills", [])
             lvl = max((mm.get(k.lower(), 0) for k in skills), default=0)
-            if sec["id"] not in covered and lvl < 2:
+            force = len([x for x in covered if x != "__l3__"]) - self.l3_cov_mark >= 2
+            if sec["id"] not in covered and lvl < 2 and not force:
                 continue
-            if skills and lvl < 2:
+            if skills and lvl < 2 and not force:
                 self.hint += ("\n\n(System: before any exam-style item, give a FADED WORKED EXAMPLE of '" + skills[0] + "': you do the first half of a tiny case aloud, he finishes it.)")
                 self.l3_cov_mark = len(covered)
                 return None
@@ -308,7 +335,8 @@ class Conversation:
             self.l3_cov_mark = cov
             self.fallback_cd = 6
         left = progress.remaining(self.track, self.day)
-        if left and self.turns_since_cov >= 5 and self.turns >= 6:
+        struggling = sum(1 for r in self.recent if r != "hit") >= 2
+        if left and self.turns_since_cov >= 5 and self.turns >= 6 and not struggling:
             out += (f"\n\n(System: you have spent about {self.turns_since_cov} turns without finishing a section. Move on NOW: teach the core idea of [{left[0]['id']}] {left[0]['title']} in this turn, "
                     "compactly, then one application question.)")
         if self.skill_streak[1] >= 2:
@@ -363,6 +391,9 @@ class Conversation:
         self.item = None
         self.name_turn = -10
         self.leak_shingles = set()
+        self.recent = []
+        self.hit_skills = set()
+        self.dbg = []
         self.item_last_skill = None
         self.fallback_cd = 0
         self.last_cov = 0
@@ -441,6 +472,8 @@ class Conversation:
         prev = next((m["content"] for m in reversed(self.messages) if m["role"] == "assistant"), "")
         verdict = None
         item_board = None
+        self.unsure_v = None
+        answer_turn = False
         real_answer = user_text and not opener and not user_text.startswith("(")
         if real_answer and self.item:
             verdict, item_note = self._resolve_item(user_text)
@@ -455,17 +488,21 @@ class Conversation:
                     verdict = None; self.verdict_note = "(Grader could not settle the answer to the practice item. Ask ONE short probing follow-up; do not rule yet.)"
             elif item_note:
                 self.verdict_note = item_note
+        elif real_answer and prev.rstrip().endswith("?") and ASSENT.match(user_text.strip()) and COMPREHENSION.search(prev[-120:]):
+            self.verdict_note = ("(He gave a bare yes to a comprehension check, which tells you nothing. Do not move on. Ask ONE concrete prediction or apply-it question about the idea you just taught.)")
         elif real_answer and prev.rstrip().endswith("?") and ASSENT.match(user_text.strip()) and not OFFER.search(prev[-160:]):
             self.verdict_note = "(He only said okay or sure and did not answer your question. Do not rule on anything. Re-ask it more simply, or give a smaller first step.)"
         elif (real_answer and prev.rstrip().endswith("?")
-                and not ASSENT.match(user_text.strip()) and not user_text.strip().endswith("?") and not OFFER.search(prev[-160:])):
+                and not ASSENT.match(user_text.strip()) and not PURE_Q.match(user_text.strip()) and not OFFER.search(prev[-160:])):
+            answer_turn = True
             import db, progress as _pg
             known = _pg.skills_for_day(self.track, self.day) + [m["topic"] for m in db.mastery_map(self.track, 40)]
             lesson_ref = prompts.ERRATA + "\n" + prompts.content.lesson_text(self.track, self.day)
             verdict = await grade_answer(prev, user_text, content_title(self.track, self.day), known, lesson_ref, think=(self.track == "quant"))
             if verdict and verdict[1] == "unsure":
-                self.verdict_note = ("(Grader could not settle this answer. Do not rule hit or miss. Ask ONE short probing follow-up that lets him show or fix his reasoning, "
-                                     "and do not tell him he is wrong yet.)")
+                self.unsure_v = verdict
+                self.verdict_note = ("(Grader could not settle this answer. Judge it yourself from the lesson and be honest: if any part is wrong or vague, say which part kindly; "
+                                     "if it is right, say so briefly. Emit your own <log> tag for it with level.)")
                 verdict = None
             elif verdict:
                 self.verdict_note = self._verdict_note(verdict)
@@ -478,6 +515,8 @@ class Conversation:
                 recent = "\n".join(("TUTOR: " if m["role"] == "assistant" else "STUDENT: ") + m["content"] for m in self.messages[-14:])
                 cover_task = asyncio.create_task(judge_sections(left, recent))
         logged = False
+        mentor_logged: list = []
+        import progress as _pgm
         emitted = {"todo": False, "board": False}
         if not opener and user_text and not user_text.startswith("("):
             self.since_graded += 1
@@ -486,7 +525,16 @@ class Conversation:
         def handle(events):
             for ev in events:
                 if ev[0] == "log":
-                    continue  # the independent grader is the single source of truth for logs
+                    if verdict or not answer_turn or mentor_logged:
+                        continue  # a decisive grader verdict (or a non-answer turn) is the single source of truth
+                    mentor_logged.append(1)
+                    lvl = cap_level(prev, ev[3] if len(ev) > 3 else 0)
+                    known = {k.lower(): k for k in (_pgm.skills_for_day(self.track, self.day))}
+                    topic = known.get(ev[1].lower(), ev[1])
+                    for e2 in self._record(topic, "hit" if ev[2] == "hit" else "miss", lvl):
+                        yield e2
+                    yield ("log", topic, "hit" if ev[2] == "hit" else "miss", lvl, "mentor")
+                    continue
                 if ev[0] in ("todo", "board"):
                     emitted[ev[0]] = True
                 if ev[0] == "speech":
@@ -499,6 +547,8 @@ class Conversation:
                             s = NAME.sub("", s).strip()
                         elif NAME.search(s):
                             self.name_turn = self.turns
+                        if s and re.fullmatch(r"(so )?(does that |do you )?(make sense|follow|get it|see (that|what i mean))( so far)?\??|(sound|does that sound) (good|right|fair)\??|(is that )?(clear|ok(ay)?)( so far)?\??", s.strip(" ."), re.I):
+                            s = ""
                         if s and (MACHINERY.search(s) or leaks(s, self.leak_shingles)):
                             s = ""
                         if s:
@@ -509,24 +559,9 @@ class Conversation:
 
         try:
             if verdict:
-                self.since_graded = 0
-                self.graded_total += 1
-                key = verdict[0].lower()
-                self.skill_streak = (verdict[0], (self.skill_streak[1] + 1) if (self.skill_streak[0] == verdict[0] and verdict[1] == "hit") else (1 if verdict[1] == "hit" else 0))
-                self.graded_skills.add(key)
-                if verdict[1] == "hit":
-                    self.hits += 1
-                if verdict[2] >= 3:
-                    self.l3_asked += 1
-                    yield ("covered", "__l3__")
+                for ev in self._record(verdict[0], verdict[1], verdict[2]):
+                    yield ev
                 yield ("log", verdict[0], verdict[1], verdict[2], verdict[4] if len(verdict) > 4 else "")
-                import progress as _pr
-                meta = _pr.section_meta(self.track, self.day)
-                done_now = prompts.db.covered_sections(self.track, self.day)
-                for sec in _pr.sections_of(self.track, self.day):
-                    sk = [x.lower() for x in meta.get(sec["id"], {}).get("skills", [])]
-                    if sk and sec["id"] not in done_now and meta[sec["id"]].get("kind") == "teach" and sum(1 for x in sk if x in self.graded_skills) / len(sk) >= 0.6:
-                        yield ("covered", sec["id"])
             if item_board:
                 yield ("board", item_board)
                 emitted["board"] = True
@@ -553,7 +588,7 @@ class Conversation:
                             for ev in handle(parser.feed(delta)):
                                 yield ev
                         cap = 5 if opener else MAX_SENTENCES
-                        if len(spoken) >= cap and (spoken[-1].endswith("?") or len(spoken) >= cap + 1):
+                        if len(spoken) >= cap and (spoken[-1].endswith("?") or len(spoken) >= cap + 1) and not (spoken[-1].count('"') % 2 == 1 and len(spoken) < cap + 4):
                             truncated = not spoken[-1].endswith("?")
                             break
             for ev in handle(parser.flush()):
@@ -564,6 +599,9 @@ class Conversation:
                     spoken.append(s)
                     yield ("sentence", s)
             said = " ".join(spoken)
+            if self.unsure_v and not mentor_logged:
+                self.since_graded = 0
+                yield ("log", self.unsure_v[0], "partial", min(2, self.unsure_v[2]), "unsure")
             if cover_task:
                 for sid in await cover_task:
                     yield ("covered", sid)
