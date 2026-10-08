@@ -47,12 +47,12 @@ async def mentor_turn(conv, text, opener=False):
     async for ev in conv.respond(text, opener=opener):
         k = ev[0]
         if k == "sentence": speech.append(ev[1])
-        elif k == "log": db.log_topic(conv.track, ev[1], ev[2], ev[3] if len(ev) > 3 else 0); tags.append(f"log:{ev[1]}={ev[2]}@L{ev[3] if len(ev) > 3 else 0}")
+        elif k == "log": db.log_topic(conv.track, ev[1], ev[2], ev[3] if len(ev) > 3 else 0); tags.append(f"log:{ev[1]}={ev[2]}@L{ev[3] if len(ev) > 3 else 0}" + (f" RAW{ev[4]}" if len(ev) > 4 and ev[4] else ""))
         elif k == "covered":
             sec = ev[1]; d, sid = (sec.split(":", 1) if sec[:1] == "d" and ":" in sec else (str(conv.day), sec))
             db.mark_covered(conv.track, int(d.lstrip("d")), sid); tags.append(f"covered:{sec}")
         elif k == "todo": db.add_todo(conv.track, conv.day, ev[1], ev[2]); tags.append(f"TODO:{ev[1]} || {ev[2][:160]}")
-        elif k == "board": tags.append(f"board:{ev[1]['kind']}:{ev[1]['title']}"); boards.append(ev[1]["body"][:900])
+        elif k == "board": tags.append(f"board:{ev[1]['kind']}:{ev[1]['title']}"); boards.append(ev[1]["body"][:3000])
         elif k == "day_done":
             refusal = conv.day_done_refusal()
             if refusal:

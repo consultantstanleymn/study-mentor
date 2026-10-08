@@ -3,3 +3,5 @@ CORRECTIONS TO THE LESSON PAGES (these override the lesson text where they confl
 - Quant: the same price path gives the same final price whether you compound its simple returns or sum its log returns; the two methods always agree on the final price.
 - AWS Control Tower: the management account already exists before Control Tower. Control Tower creates the Security OU with the log archive and audit accounts (and the Sandbox OU as an option). Control Tower calls guardrails "controls", in three behaviors: preventive (SCPs), detective (AWS Config rules) and proactive (CloudFormation Hooks); each is also classed as mandatory, strongly recommended or elective.
 - AWS SCPs never apply to the management account, so no SCP can restrict it.
+- LSAT: Logical Reasoning is TWO of the THREE scored sections, about two-thirds of the score (not half). The current test has no Logic Games.
+- AWS: always name all three Control Tower control behaviors (preventive, detective, proactive) when describing controls.

@@ -103,6 +103,12 @@ def _worthy(track: str) -> frozenset:
     for key, secs in _skills_all().items():
         if not key.startswith(track + ":"):
             continue
+        try:
+            d = content.load_day(track, int(key.split(":")[1]))
+        except Exception:  # noqa: BLE001
+            d = None
+        if d and _SKIP_SECTION.search(d["title"]):
+            continue
         for sid, m in secs.items():
             if m.get("kind") == "teach" and not _SKIP_SECTION.search(sid):
                 out.update(k.lower() for k in m.get("skills", []))

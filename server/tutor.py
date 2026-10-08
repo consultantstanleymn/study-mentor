@@ -166,6 +166,15 @@ def db_has_todo(track: str, day: int) -> bool:
     return db.has_todo_for_day(track, day)
 
 
+def _shingles(text: str, n: int = 6) -> set:
+    w = re.findall(r"[a-z0-9']+", text.lower())
+    return {" ".join(w[i:i + n]) for i in range(max(0, len(w) - n + 1))}
+
+
+def leaks(sentence: str, shingles: set) -> bool:
+    return bool(shingles) and bool(_shingles(sentence) & shingles)
+
+
 def content_title(track: str, day: int) -> str:
     import content
     d = content.load_day(track, day)
@@ -215,10 +224,15 @@ class Conversation:
         self.item_tries += 1
         for sec in reversed(progress.sections_of(self.track, self.day)):
             it = progress.item_for(self.track, self.day, sec["id"])
-            if not it or sec["id"] not in covered or sec["id"] in self.used_items:
+            if not it or sec["id"] in self.used_items:
                 continue
+            if str(it["answer"]).strip()[:1].upper() in "ABCDE" and len(str(it["answer"]).strip()) == 1 and not (it.get("options") and len(it["options"]) >= 4):
+                continue  # malformed MCQ: options missing
             skills = progress.section_meta(self.track, self.day).get(sec["id"], {}).get("skills", [])
-            if skills and max((mm.get(k.lower(), 0) for k in skills), default=0) < 2:
+            lvl = max((mm.get(k.lower(), 0) for k in skills), default=0)
+            if sec["id"] not in covered and lvl < 2:
+                continue
+            if skills and lvl < 2:
                 self.hint += ("\n\n(System: before any exam-style item, give a FADED WORKED EXAMPLE of '" + skills[0] + "': you do the first half of a tiny case aloud, he finishes it.)")
                 self.l3_cov_mark = len(covered)
                 return None
@@ -253,6 +267,7 @@ class Conversation:
                                                f"Then ask ONE probe: 'why not <a tempting wrong option>?' using these traps: {json.dumps(traps)}. Plain words, never hit or miss.)")
             return (skill, "miss", 3, f"chose {pick}"), (f"(Item result, decided in code: he chose {pick}, which is WRONG; the correct answer is {right}. The trap he fell into: {traps.get(pick, 'a tempting near miss')}. "
                                                          f"In two kind sentences explain why {pick} tempts and why {right} is right: {it.get('why','')} Then ask one short easier follow-up about the key constraint. Plain words, never hit or miss.)")
+        self.item_last_skill = skill
         self.item = None   # open-answer item (quant): grade with the item key as reference
         return "OPEN", (it["stem"], f"Correct answer: {it['answer']}. Why: {it.get('why','')} Common wrong answers and traps: {json.dumps(it.get('traps', {}))}")
 
@@ -273,20 +288,31 @@ class Conversation:
             return out + (f"\n\n(System: WARM-UP. Before any new material, ask ONE quick retrieval question on his earlier skill '{t['topic']}' at rung L{max(2, min(4, t['level'] + 1))}"
                           f"{' (he missed it last time, so keep it gentle)' if t['last_result'] == 'miss' else ''}. Do not teach new material this turn.)")
         cov = len([x for x in db.covered_sections(self.track, self.day) if x != "__l3__"])
-        if self.mode in ("teach", "review") and (cov - self.l3_cov_mark >= 2 or (self.turns >= 10 and self.l3_asked == 0)) and not self.item and not self.stored_possible():
-            import progress
+        if cov != self.last_cov:
+            self.last_cov, self.turns_since_cov = cov, 0
+        else:
+            self.turns_since_cov += 1
+        self.fallback_cd = max(0, self.fallback_cd - 1)
+        if (self.mode in ("teach", "review") and self.fallback_cd == 0 and not self.item and not self.stored_possible()
+                and (cov - self.l3_cov_mark >= 2 or (self.turns >= 12 and self.l3_asked == 0))):
             bank = prompts.content.load_day(self.track, self.day)
             qs = (bank or {}).get("questions") or []
-            if False:
-                pass
-            elif qs and self.bank_idx < len(qs):
+            if qs and self.bank_idx < len(qs):
                 out += (f"\n\n(System: it is time for ONE exam-tier (L3) item. Use Q{self.bank_idx + 1} from today's question bank: paraphrase the stem, read options A to D briefly, "
-                        "and do not explain until he commits to an answer. Log it with level=\"3\".)")
+                        "and do not explain until he commits to an answer.)")
                 self.bank_idx += 1
             else:
-                out += ("\n\n(System: it is time for ONE exam-tier (L3) item. Write an ORIGINAL full item: AWS = a 3 to 4 sentence business scenario with four options and a named distractor; "
-                        "LSAT = a 4 to 6 sentence stimulus with a question stem and five answer choices; quant = an interview-style puzzle. Do not explain until he commits. Log it with level=\"3\".)")
-            self.l3_cov_mark = cov; self.l3_asked += 0
+                out += ("\n\n(System: it is time for ONE exam-tier (L3) item. Write an ORIGINAL full item on a skill he has NOT drilled yet today: AWS = a 3 to 4 sentence business scenario with four options "
+                        "(put them on the board with a <board kind=\"points\">) and a named distractor; LSAT = a 4 to 6 sentence stimulus, a question stem and five options on the board; quant = a short interview-style "
+                        "question about a pitfall or concept (look-ahead bias, Sharpe, survivorship), NOT more return arithmetic. Do not explain until he commits.)")
+            self.l3_cov_mark = cov
+            self.fallback_cd = 6
+        left = progress.remaining(self.track, self.day)
+        if left and self.turns_since_cov >= 5 and self.turns >= 6:
+            out += (f"\n\n(System: you have spent about {self.turns_since_cov} turns without finishing a section. Move on NOW: teach the core idea of [{left[0]['id']}] {left[0]['title']} in this turn, "
+                    "compactly, then one application question.)")
+        if self.skill_streak[1] >= 2:
+            out += f"\n\n(System: he has answered '{self.skill_streak[0]}' correctly {self.skill_streak[1]} times. Do NOT ask about that skill again; advance to the next skill or section.)"
         if self.since_graded >= 3:
             out += "\n\n(System: he has not answered a real question in 3 turns. This turn MUST end with a concrete application question he can answer, not a check-in.)"
         return out
@@ -336,6 +362,13 @@ class Conversation:
         self.used_items = set()
         self.item = None
         self.name_turn = -10
+        self.leak_shingles = set()
+        self.item_last_skill = None
+        self.fallback_cd = 0
+        self.last_cov = 0
+        self.turns_since_cov = 0
+        self.skill_streak = (None, 0)
+        self.graded_skills = set()
         self.graded_total = 0
         self.complete_base = None
         self.item_tries = 0
@@ -370,7 +403,10 @@ class Conversation:
             hint += self._pressure_hint()
             if re.search(r"\b(draw|diagram|whiteboard|board|sketch|visuali[sz]e|illustrate|mermaid|picture)\b", user_text, re.I):
                 hint += "\n\n(System note: he asked to see it. Emit a NEW <board> tag in this reply, with <layout board=\"wide\"/> first, then walk through it with <focus/> tags.)"
-            msgs.append({"role": "user", "content": user_text + hint})
+            msgs.append({"role": "user", "content": user_text})
+            if hint.strip():
+                msgs.append({"role": "system", "content": "HIDDEN NOTES FOR THIS REPLY ONLY. Follow them silently. Never speak, quote or paraphrase the notes themselves:" + hint})
+            self.leak_shingles = _shingles(hint + " " + prompts.FINAL_REMINDERS)
         return {
             "model": MODEL,
             "messages": msgs,
@@ -414,7 +450,7 @@ class Conversation:
                 verdict = await grade_answer(item_note[0], user_text, content_title(self.track, self.day), known, item_note[1], think=(self.track == "quant"))
                 item_note = None
                 if verdict and verdict[1] != "unsure":
-                    verdict = (verdict[0], verdict[1], 3, verdict[3]); self.verdict_note = self._verdict_note(verdict)
+                    verdict = (self.item_last_skill or verdict[0], verdict[1], 3, verdict[3]); self.verdict_note = self._verdict_note(verdict)
                 else:
                     verdict = None; self.verdict_note = "(Grader could not settle the answer to the practice item. Ask ONE short probing follow-up; do not rule yet.)"
             elif item_note:
@@ -463,7 +499,9 @@ class Conversation:
                             s = NAME.sub("", s).strip()
                         elif NAME.search(s):
                             self.name_turn = self.turns
-                        if s and not MACHINERY.search(s):
+                        if s and (MACHINERY.search(s) or leaks(s, self.leak_shingles)):
+                            s = ""
+                        if s:
                             spoken.append(s)
                             yield ("sentence", s)
                 else:
@@ -473,12 +511,22 @@ class Conversation:
             if verdict:
                 self.since_graded = 0
                 self.graded_total += 1
+                key = verdict[0].lower()
+                self.skill_streak = (verdict[0], (self.skill_streak[1] + 1) if (self.skill_streak[0] == verdict[0] and verdict[1] == "hit") else (1 if verdict[1] == "hit" else 0))
+                self.graded_skills.add(key)
                 if verdict[1] == "hit":
                     self.hits += 1
                 if verdict[2] >= 3:
                     self.l3_asked += 1
                     yield ("covered", "__l3__")
-                yield ("log", verdict[0], verdict[1], verdict[2])
+                yield ("log", verdict[0], verdict[1], verdict[2], verdict[4] if len(verdict) > 4 else "")
+                import progress as _pr
+                meta = _pr.section_meta(self.track, self.day)
+                done_now = prompts.db.covered_sections(self.track, self.day)
+                for sec in _pr.sections_of(self.track, self.day):
+                    sk = [x.lower() for x in meta.get(sec["id"], {}).get("skills", [])]
+                    if sk and sec["id"] not in done_now and meta[sec["id"]].get("kind") == "teach" and sum(1 for x in sk if x in self.graded_skills) / len(sk) >= 0.6:
+                        yield ("covered", sec["id"])
             if item_board:
                 yield ("board", item_board)
                 emitted["board"] = True
@@ -604,7 +652,12 @@ async def grade_answer(question: str, answer: str, lesson_title: str, topics: li
             if k.lower() == topic.lower():
                 topic = k
         lvl = cap_level(question, j.get("level") if isinstance(j.get("level"), int) else 0)
-        return topic, j["result"], lvl, str(j.get("flaw") or "")[:300]
+        if j["result"] == "miss":
+            chk = await _quick("Answer only yes or no. Does the STUDENT ANSWER clearly contradict or fail the REFERENCE LINE? Ignore wording differences; if the student's meaning is compatible with the line, answer no.",
+                               f"REFERENCE LINE: {j.get('ref_quote')}\nSTUDENT ANSWER: {answer}\nTUTOR QUESTION: {question[-400:]}", 5)
+            if not chk.lower().startswith("yes"):
+                j["result"] = "unsure"
+        return topic, j["result"], lvl, str(j.get("flaw") or "")[:300], json.dumps({k: j.get(k) for k in ("result", "ref_quote", "flaw")})[:300]
     return None
 
 

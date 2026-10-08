@@ -180,6 +180,7 @@ def system_prompt(track: str, day: int, mode: str) -> str:
     notes_s = "\n".join(f"- Day {n['day']}: {n['note']}" for n in notes) or "- This is the first session."
     ledger = ""
     parts = [
+        ERRATA + "\n(Say these corrected facts exactly; they override the lesson page.)",
         PERSONA,
         TRACK_NOTES[track],
         MODE_RULES.get(mode, MODE_RULES["teach"]),
@@ -188,7 +189,6 @@ def system_prompt(track: str, day: int, mode: str) -> str:
         f"RECENT SESSION DEBRIEFS (what he learned, what went wrong, where to start):\n{notes_s}",
         "OPEN HOMEWORK ON HIS LIST (do not re-assign; ask about these): " + ("; ".join(t["title"] for t in db.open_todos(track)) or "none"),
         "SKILLS TO TRACK TODAY (use these exact names as the topic in <log> tags; each section has a kind: teach, assignment or practice):\n" + skills_block(track, day),
-        ERRATA,
         "=== TODAY'S MATERIAL (private source; do not read aloud) ===\n" + lesson,
         "=== TODAY'S QUESTION BANK ===\n" + question_bank(track, day),
     ]
