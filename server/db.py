@@ -1,9 +1,10 @@
 """Progress, weak topics and session notes (SQLite, local only)."""
+import os
 import sqlite3
 import time
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "mentor.db"
+DB_PATH = Path(os.environ["MENTOR_DB"]) if os.environ.get("MENTOR_DB") else Path(__file__).resolve().parent.parent / "data" / "mentor.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);

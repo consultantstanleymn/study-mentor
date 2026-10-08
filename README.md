@@ -1,6 +1,6 @@
 # Study Mentor: open-source AI voice tutor
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-2DD4BF.svg)](LICENSE) ![Python](https://img.shields.io/badge/python-3.11%2B-2DD4BF) ![Self-hosted](https://img.shields.io/badge/self--hosted-yes-2DD4BF)
+[![License: MIT](https://img.shields.io/badge/license-MIT-8FA0F5.svg)](LICENSE) ![Python](https://img.shields.io/badge/python-3.11%2B-8FA0F5) ![Self-hosted](https://img.shields.io/badge/self--hosted-yes-8FA0F5)
 
 A free, self-hosted AI voice tutor with a live Mermaid whiteboard. You talk to it, it talks back, quizzes you, and draws the idea as it explains. Built for AWS Solutions Architect Professional (SAP-C02), LSAT and quant finance prep, and easy to point at any curriculum you provide.
 
@@ -17,6 +17,15 @@ It runs entirely on your machine except for the text sent to a language model AP
 ## Features
 
 - Voice-first tutoring with speech recognition, text to speech, and streaming language model responses
+- Explain-first teaching for beginners: it teaches an idea in plain words, then checks you, instead of quizzing from the first minute
+- A five-rung mastery ladder (taught, recognises, applies, exam-style, professional) tracked per skill, with spaced review: skills come back after 12 hours, 1, 3, 7 and 21 days depending on rung
+- An independent grader scores your answers in code, separate from the mentor, so praise and corrections are honest; misses need a verbatim quote from the lesson to count
+- Server-owned practice items (hundreds of generated exam-style questions with named distractor traps) graded in code, including review items for skills that are due
+- Coverage tracking: a day only completes after every section is taught; whatever you skipped or got wrong carries forward to the next session
+- A persistent homework list: the mentor adds detailed tasks, they stay until you tick them, oldest first
+- Session debriefs and warm-ups: each session opens by recalling what you got wrong last time
+- An errata file for correcting known mistakes in your own lesson material, plus a background fact checker
+- Evaluation harness (`evals/`): simulated students (passive, struggling, curious, overconfident), multi-day chains and a scoring rubric, used to measure teaching quality
 - Multiple study modes: Teach, Quiz, Grill, Review, and Ask
 - A whiteboard where the mentor draws tables, key points, and Mermaid diagrams, highlighting each node as it explains
 - Stage-by-stage whiteboard walkthroughs with auto-resizing layouts (wide, normal, rail)
@@ -39,7 +48,7 @@ Browser (mic, audio queue, whiteboard)
 SQLite progress
 ```
 
-The model can emit hidden tags that are never spoken: `board`, `focus`, `layout`, `log`, `day_done`, `note`. These control the whiteboard content, highlight nodes, resize the layout, mark a day complete, or save a session note.
+The model can emit hidden tags that are never spoken: `board`, `focus`, `layout`, `log`, `covered`, `todo`, `calc`, `day_done`, `note`. These control the whiteboard, record progress and coverage, add homework, run exact arithmetic on the server, mark a day complete, or save a session note. Grading, item selection, spaced review and coverage rules run in code, not in the prompt, so the model cannot talk its way past them.
 
 ## Requirements
 
@@ -136,7 +145,7 @@ An optional systemd user service is available for auto start.
 
 ## Privacy
 
-Progress data (days done, weak topics, session notes) is stored in a local SQLite file at `data/mentor.db`. Nothing leaves your machine except the text sent to the language model API you configure. Audio is transcribed locally and never uploaded.
+Progress data (days done, mastery levels, homework, coverage, session notes) is stored in a local SQLite file at `data/mentor.db`. Nothing leaves your machine except the text sent to the language model API you configure. Audio is transcribed locally and never uploaded.
 
 ## Troubleshooting
 
@@ -156,8 +165,13 @@ The default `base.en` model is fast but less accurate. Set `MENTOR_WHISPER=small
 
 Check that `MENTOR_API_KEY` is set or that `MENTOR_KEY_FILE` points to a file containing your key. Verify `MENTOR_API_URL` and `MENTOR_MODEL` match your provider's API.
 
+## Evaluating the teaching
+
+`evals/` contains a simulator that plays a student against the real tutor in a throwaway database. `evals/run_iter.sh N` runs four standard sessions, `evals/sim_multi.py` runs a multi-day chain with a simulated clock, and `evals/RUBRIC.md` lists the ten criteria used to score a run. Set `MENTOR_DB` to point the server at a different database file.
+
 ## Roadmap
 
+- Timed mixed practice sets, weekly professional-level (L4) tasks and mock-exam score logging that re-plans weak skills
 - Vision input: let the mentor see diagrams or screenshots you share
 - More Kokoro voices and voice quality options
 - Additional whiteboard rendering formats

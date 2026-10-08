@@ -719,9 +719,17 @@ class Conversation:
                 if s:
                     spoken.append(s)
                     yield ("sentence", s)
+            if spoken and not spoken[-1].rstrip().endswith("?") and (opener or self.closing or self.item or not answer_expected(user_text)):
+                self.dbg.append(("no-q-exempt", f"opener={opener} closing={self.closing} item={bool(self.item)}"))
             if (truncated and not capped_by_us or (spoken and not spoken[-1].rstrip().endswith("?"))) and spoken and not opener and not self.closing and not self.item and answer_expected(user_text):
-                q = (await _quick("Write ONE short spoken question (max 22 words) that the tutor would naturally ask next so the student applies the idea just explained. Plain words, no preamble. Output only the question.",
-                                  " ".join(spoken)[-900:], 60)).strip()
+                q = ""
+                for _try in range(2):
+                    q = (await _quick("Write ONE short spoken question (max 22 words) that the tutor would naturally ask next so the student applies the idea just explained. Plain words, no preamble. Output only the question.",
+                                      " ".join(spoken)[-900:], 60)).strip()
+                    if q.endswith("?"):
+                        break
+                if not q.endswith("?"):
+                    q = "In your own words, what is the key point there?"
                 if q.endswith("?") and len(q.split()) <= 30:
                     lastw = re.findall(r"[A-Za-z']+", spoken[-1])[-1:] 
                     if lastw and q.split()[0].strip(",.?").lower() == lastw[0].lower():

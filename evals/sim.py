@@ -34,7 +34,10 @@ async def chat(messages, max_tokens, temperature, key):
     body = {"model": tutor.MODEL, "messages": messages, "thinking": {"type": "disabled"}, "temperature": temperature, "max_tokens": max_tokens}
     async with httpx.AsyncClient(timeout=90) as c:
         for _ in range(3):
-            r = await c.post(tutor.API_URL, headers={"Authorization": f"Bearer {key}"}, json=body)
+            try:
+                r = await c.post(tutor.API_URL, headers={"Authorization": f"Bearer {key}"}, json=body)
+            except httpx.HTTPError:
+                await asyncio.sleep(3); continue
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"].strip()
             await asyncio.sleep(2)
@@ -103,7 +106,7 @@ async def main():
             out.append(f"**{who}**: {text}")
             if tags: out.append("   `" + " | ".join(tags) + "`")
         left = [x["title"] for x in progress.remaining(track, int(day))]
-        out.append("DEBUG: " + json.dumps([d for d in conv.dbg][:40]))
+        out.append("DEBUG: " + json.dumps([d for d in conv.dbg if d[0] != "cover-blocked"][:60]))
         out.append(f"\n---\nSECTIONS STILL UNCOVERED: {left}\nOPEN TODOS: {[t['title'] for t in db.open_todos(track)]}\n")
         p = ROOT / "evals" / "out" / f"{label}-{track}{day}-{persona}.md"; p.write_text("\n".join(out)); return p
     for p in await asyncio.gather(*[one(s) for s in specs]): print(p)
